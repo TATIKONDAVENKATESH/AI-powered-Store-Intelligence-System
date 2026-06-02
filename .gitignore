@@ -1,0 +1,67 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Environment variables
+.env
+
+# Logs
+logs/
+*.log
+
+# Test cache
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+
+# Database
+storage/*.db
+storage/*.sqlite
+storage/*.sqlite3
+
+# Generated events
+data/generated_events/
+
+# Model weights
+models/*.pt
+models/*.pth
+
+# YOLO cache
+runs/
+
+# Streamlit cache
+.streamlit/cache/
+
+# Temporary files
+tmp/
+temp/
+
+# Video files (large dataset)
+data/videos/
+
+# Docker
+*.pid
+
+docs/DESIGN.md
+docs/CHOICES.md

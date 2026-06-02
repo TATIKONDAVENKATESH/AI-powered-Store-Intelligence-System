@@ -1,0 +1,57 @@
+version: "3.9"
+
+services:
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: store_intelligence_api
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./storage:/app/storage          # SQLite DB persists on host
+      - ./data:/app/data                # videos + POS CSV + generated events
+      - ./config:/app/config            # store_layout.json
+      - ./pipeline:/app/pipeline        # pipeline scripts accessible in container
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=sqlite:///./storage/store_intelligence.db
+      - POS_CSV=./data/pos_transactions.csv
+      - LAYOUT_JSON=./config/store_layout.json
+      - YOLO_MODEL=yolov8n.pt
+      - YOLO_CONFIDENCE=0.4
+      - API_HOST=0.0.0.0
+      - API_PORT=8000
+      - LOG_LEVEL=INFO
+      - EVENTS_DIR=./data/generated_events
+      - STORE_ID=STORE_BLR_002
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: store_intelligence_dashboard
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./dashboard:/app/dashboard
+    env_file:
+      - .env
+    environment:
+      - API_URL=http://api:8000          # service-to-service via docker network, not localhost
+      - STORE_ID=STORE_BLR_002
+    depends_on:
+      api:
+        condition: service_healthy
+    command: streamlit run dashboard/streamlit_app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    restart: unless-stopped
