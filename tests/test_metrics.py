@@ -1,9 +1,3 @@
-# PROMPT: "Write pytest-asyncio tests for app/metrics.py. Cover: zero visitors,
-# conversion rate calculation, queue depth, abandonment rate, staff exclusion,
-# avg dwell per zone. Seed DB directly via SQLAlchemy."
-# CHANGES MADE: Used direct SQL inserts instead of ingestion layer to isolate
-# metrics logic. Added staff-exclusion assertion. Fixed conversion rate formula.
-
 from __future__ import annotations
 import os, sys, uuid
 import pytest

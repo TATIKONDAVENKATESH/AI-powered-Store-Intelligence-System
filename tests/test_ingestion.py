@@ -1,16 +1,3 @@
-# PROMPT: "Write pytest-asyncio tests for app/ingestion.py. Cover: happy path ingest,
-# duplicate deduplication (idempotent), partial failure on bad event, empty batch,
-# POS CSV loading with invoice_number as transaction key. Use in-memory SQLite."
-# CHANGES MADE: Updated POS CSV test fixture to use invoice_number column (actual
-# CSV schema). Fixed transaction_id dedup test to use invoice_number. Added multi-SKU
-# order test to verify basket_value is summed correctly per invoice. Added tests for:
-# - exception path in ingest loop (lines 67-70): patch db.execute to raise on INSERT
-# - bad total_amount in POS (lines 111-112): non-numeric value
-# - unparseable date in POS (lines 122-126): bad date format
-# - missing invoice_number (line 105): empty invoice skipped
-# - build_ingest_batches (line 160): verify batch splitting
-# FIX: Replaced fragile call-count patch with AsyncMock that raises on INSERT keyword.
-
 from __future__ import annotations
 import os
 import sys

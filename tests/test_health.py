@@ -1,9 +1,3 @@
-# PROMPT: "Write pytest-asyncio tests for app/health.py. Cover: status ok when
-# all cameras fresh, status degraded when any camera stale, status down when DB
-# unreachable, stale_feed flag, per-camera last_event_at populated."
-# CHANGES MADE: Simulated DB failure by patching db.execute to raise. Added check
-# that all expected camera IDs appear in response.
-
 from __future__ import annotations
 import os, sys, uuid
 import pytest

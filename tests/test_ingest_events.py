@@ -1,9 +1,3 @@
-# PROMPT: "Write pytest tests for pipeline/ingest_events.py. Cover: main() with valid
-# JSONL, missing file path, HTTP error from API, batch splitting, empty file."
-# CHANGES MADE: Mock urllib.request.urlopen to avoid real HTTP calls. Used tmp_path
-# for JSONL fixture. Covered all branches: missing file, empty file, successful batch,
-# HTTP URLError.
-
 from __future__ import annotations
 import json
 import os

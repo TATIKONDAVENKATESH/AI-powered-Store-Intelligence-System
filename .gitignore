@@ -65,3 +65,6 @@ data/videos/
 
 docs/DESIGN.md
 docs/CHOICES.md
+data/pos_transactions.csv
+data/camera_frames/
+

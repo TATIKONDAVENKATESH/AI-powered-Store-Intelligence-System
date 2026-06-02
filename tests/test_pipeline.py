@@ -1,15 +1,3 @@
-# PROMPT: "Write pytest tests for pipeline/emit.py, pipeline/tracker.py, pipeline/detect.py.
-# Cover: build_event schema compliance, EventEmitter flush (with and without output_path),
-# merge_event_files, CameraTracker visitor_id assignment, re-entry detection (proximity),
-# get_active(), StaffDetector on CAM_BILLING_01 with real HSV frame, detect.py helpers:
-# centroid, point_in_polygon, line_crossed, load_layout."
-# CHANGES MADE: Added tests for detect.py pure helper functions (no YOLO/video needed).
-# Added re-entry proximity test covering tracker.py lines 61-72,75,100-102.
-# Added get_active() call covering line 134. Added StaffDetector CAM_BILLING_01 HSV
-# path covering lines 159-169. Added emit flush() with no output_path covering line 73.
-# FIX: Added test_tracker_reentry_exit_frame_none (line 62) and
-# test_tracker_reentry_bbox_none (line 66) to cover the two remaining missed branches.
-
 from __future__ import annotations
 import json
 import os

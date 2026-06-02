@@ -1,9 +1,3 @@
-# PROMPT: "Write pytest-asyncio tests for app/funnel.py. Cover: empty store,
-# full funnel path, drop-off percentages, re-entry does not double-count visitor,
-# staff excluded from all stages."
-# CHANGES MADE: Added re-entry deduplication test using same visitor_id with two
-# ENTRY events. Tightened drop_off assertions to use approx.
-
 from __future__ import annotations
 import os, sys, uuid
 import pytest

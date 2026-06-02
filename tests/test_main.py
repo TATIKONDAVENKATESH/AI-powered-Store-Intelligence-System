@@ -1,11 +1,3 @@
-# PROMPT: "Write pytest-asyncio integration tests for app/main.py FastAPI routes.
-# Cover: POST /events/ingest, GET /stores/{id}/metrics, GET /stores/{id}/funnel,
-# GET /stores/{id}/heatmap, GET /stores/{id}/anomalies, GET /health.
-# Use httpx.AsyncClient with ASGITransport. Use in-memory SQLite.
-# Test: happy path, empty store, unknown store, idempotent ingest, 503 on DB error."
-# CHANGES MADE: Patched engine/SessionLocal in main module directly so in-memory DB
-# is used. Added schema init inside fixture. Covered all 6 routes + middleware path.
-
 from __future__ import annotations
 import os
 import sys

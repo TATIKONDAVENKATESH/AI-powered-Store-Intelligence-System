@@ -1,11 +1,3 @@
-# PROMPT: "Write pytest-asyncio tests for app/anomalies.py. Cover: no anomalies
-# when thresholds not exceeded, BILLING_QUEUE_SPIKE triggers at correct depth,
-# CONVERSION_DROP triggers when rate < 10%, DEAD_ZONE triggers for inactive zone,
-# severity levels are correct."
-# CHANGES MADE: Seeded DB directly; patched QUEUE_SPIKE_THRESHOLD to 2 to keep
-# test data small; fixed DEAD_ZONE to use a window far in the past so no events
-# appear within the 30-minute window.
-
 from __future__ import annotations
 import os, sys, uuid
 import pytest
