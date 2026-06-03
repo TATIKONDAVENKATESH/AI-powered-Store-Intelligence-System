@@ -86,7 +86,4 @@ data/camera_frames/
 
 *.pid
 
-docs/DESIGN.md
-docs/CHOICES.md
-
 tools/

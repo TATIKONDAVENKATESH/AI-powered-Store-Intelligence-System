@@ -69,8 +69,4 @@ models/*.pt
 models/*.pth
 yolov8n.pt
 
-
-docs/DESIGN.md
-docs/CHOICES.md
-
 tools/
