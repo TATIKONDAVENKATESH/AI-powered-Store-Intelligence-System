@@ -1,22 +1,74 @@
-# Never copy large binary files into build context
-data/videos/
-data/generated_events/
-storage/
+# Large datasets and generated outputs
 
-# Git and editor noise
-.git/
-.gitignore
+data/Videos/
+data/videos/
+data/camera_frames/
+data/generated_events/*
+!data/generated_events/sample_events.jsonl
+
+# Database
+
+storage/
+storage/*.db
+storage/*.sqlite
+storage/*.sqlite3
+
+# Python virtual environments
+
+venv/
 .venv/
-__pycache__/
+env/
+
+# Python cache
+
+**pycache**/
 *.pyc
 *.pyo
 *.pyd
 .pytest_cache/
+
+# Build artifacts
+
+build/
+dist/
 *.egg-info/
 
+# Git
+
+.git/
+.gitignore
+
+# IDE
+
+.idea/
+.vscode/
+*.iml
+
 # Logs
+
+logs/
 *.log
 
-# OS noise
+# OS files
+
 .DS_Store
 Thumbs.db
+
+# YOLO runtime outputs
+
+runs/
+
+# Temporary files
+
+tmp/
+temp/
+
+# Model checkpoints (if stored locally)
+
+models/*.pt
+models/*.pth
+yolov8n.pt
+
+
+docs/DESIGN.md
+docs/CHOICES.md

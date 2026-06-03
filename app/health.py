@@ -11,10 +11,9 @@ STALE_THRESHOLD_MINUTES = 10
 
 
 async def compute_health(db: AsyncSession) -> HealthResponse:
-    """DB connectivity + per-camera feed staleness."""
-    now_utc = datetime.now(timezone.utc)
+    """DB connectivity + per-camera feed staleness. STALE_FEED warning if >10 min lag."""
+    now_utc    = datetime.now(timezone.utc)
     checked_at = now_utc.isoformat()
-    db_connected = True
 
     try:
         await db.execute(text("SELECT 1"))
@@ -59,7 +58,7 @@ async def compute_health(db: AsyncSession) -> HealthResponse:
             stale=is_stale,
         ))
 
-    # Overall last event
+    # Overall last event across all cameras
     result = await db.execute(text("SELECT MAX(timestamp) FROM events"))
     global_last = result.scalar()
 
@@ -70,6 +69,6 @@ async def compute_health(db: AsyncSession) -> HealthResponse:
         store_feeds=store_feeds,
         last_event_at=global_last,
         stale_feed=any_stale,
-        db_connected=db_connected,
+        db_connected=True,
         checked_at=checked_at,
     )

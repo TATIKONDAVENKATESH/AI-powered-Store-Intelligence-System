@@ -7,11 +7,11 @@ from app.models import HeatmapResponse, HeatmapZone
 
 logger = logging.getLogger(__name__)
 
-MIN_SESSIONS_FOR_CONFIDENCE = 20
+MIN_SESSIONS_FOR_CONFIDENCE = 20  # data_confidence=False if fewer than 20 unique visitors
 
 
 async def compute_heatmap(store_id: str, db: AsyncSession) -> HeatmapResponse:
-    """Zone visit frequency + avg dwell, normalised 0-100."""
+    """Zone visit frequency + avg dwell, normalised 0–100."""
     now_utc = datetime.now(timezone.utc).isoformat()
 
     result = await db.execute(
@@ -19,8 +19,8 @@ async def compute_heatmap(store_id: str, db: AsyncSession) -> HeatmapResponse:
             SELECT
                 zone_id,
                 sku_zone,
-                COUNT(DISTINCT visitor_id)   AS visit_freq,
-                AVG(dwell_ms) / 1000.0       AS avg_dwell_s
+                COUNT(DISTINCT visitor_id)  AS visit_freq,
+                AVG(dwell_ms) / 1000.0      AS avg_dwell_s
             FROM events
             WHERE store_id = :sid
               AND event_type IN ('ZONE_ENTER', 'ZONE_DWELL')
@@ -50,7 +50,6 @@ async def compute_heatmap(store_id: str, db: AsyncSession) -> HeatmapResponse:
             data_confidence=(freq >= MIN_SESSIONS_FOR_CONFIDENCE),
         ))
 
-    # Sort by normalised_score descending for dashboard rendering
     zones.sort(key=lambda z: z.normalised_score, reverse=True)
 
     logger.debug("Heatmap store=%s zones=%d", store_id, len(zones))

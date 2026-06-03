@@ -7,19 +7,18 @@ from app.models import AnomalyResponse, Anomaly
 
 logger = logging.getLogger(__name__)
 
-# Rule-based thresholds (no historical baseline available)
 QUEUE_WARN_DEPTH     = 3
 QUEUE_CRITICAL_DEPTH = 6
-CONVERSION_WARN_PCT  = 0.10   # below 10% is anomalous
+CONVERSION_WARN_PCT  = 0.10   # flag when rate < 10%
 DEAD_ZONE_MINUTES    = 30     # no zone visits in 30 min
 
 
 async def compute_anomalies(store_id: str, db: AsyncSession) -> AnomalyResponse:
     """Detect active operational anomalies for a store."""
-    now_utc = datetime.now(timezone.utc)
+    now_utc   = datetime.now(timezone.utc)
     anomalies: list[Anomaly] = []
 
-    # --- Queue spike ---
+    # ── Queue spike ─────────────────────────────────────────────────────────
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT visitor_id)
@@ -54,7 +53,7 @@ async def compute_anomalies(store_id: str, db: AsyncSession) -> AnomalyResponse:
             detected_at=now_utc.isoformat(),
         ))
 
-    # --- Conversion drop ---
+    # ── Conversion drop ──────────────────────────────────────────────────────
     result = await db.execute(
         text("SELECT COUNT(DISTINCT visitor_id) FROM events WHERE store_id=:sid AND is_staff=0"),
         {"sid": store_id},
@@ -68,7 +67,7 @@ async def compute_anomalies(store_id: str, db: AsyncSession) -> AnomalyResponse:
             INNER JOIN pos_transactions p
                 ON  p.store_id = e.store_id
                 AND datetime(p.timestamp) >= datetime(e.timestamp)
-                AND datetime(p.timestamp) <= datetime(e.timestamp, '+300 seconds')
+                AND datetime(p.timestamp) <= datetime(e.timestamp, '+1800 seconds')
             WHERE e.store_id = :sid
               AND e.zone_id LIKE '%BILLING%'
               AND e.is_staff = 0
@@ -77,7 +76,7 @@ async def compute_anomalies(store_id: str, db: AsyncSession) -> AnomalyResponse:
     )
     converted: int = result.scalar() or 0
 
-    if total_visitors > 10:   # only flag when there is enough data
+    if total_visitors > 10:  # only flag when there is enough data
         rate = converted / total_visitors
         if rate < CONVERSION_WARN_PCT:
             anomalies.append(Anomaly(
@@ -88,10 +87,22 @@ async def compute_anomalies(store_id: str, db: AsyncSession) -> AnomalyResponse:
                 detected_at=now_utc.isoformat(),
             ))
 
-    # --- Dead zone (no ZONE_ENTER in last 30 min) ---
-    cutoff = now_utc.replace(tzinfo=timezone.utc)
-    cutoff_iso = (cutoff.replace(microsecond=0).isoformat()
-                  .replace("+00:00", "Z"))
+    result = await db.execute(
+        text("""
+             SELECT MAX(timestamp)
+             FROM events
+             WHERE store_id = :sid
+             """),
+        {"sid": store_id},
+    )
+
+    latest_event_ts = result.scalar()
+
+    if latest_event_ts is None:
+        latest_event_ts = now_utc.isoformat()
+
+    # ── Dead zone (no ZONE_ENTER in last 30 min) ─────────────────────────────
+    cutoff_iso = latest_event_ts
 
     result = await db.execute(
         text("""
@@ -121,7 +132,9 @@ async def compute_anomalies(store_id: str, db: AsyncSession) -> AnomalyResponse:
         {"sid": store_id, "cutoff": cutoff_iso, "offset": f"-{DEAD_ZONE_MINUTES} minutes"},
     )
     active_zones = {row[0] for row in result.fetchall()}
-    dead_zones = all_zones - active_zones
+
+
+    dead_zones   = all_zones - active_zones
 
     for zone_id in sorted(dead_zones):
         anomalies.append(Anomaly(

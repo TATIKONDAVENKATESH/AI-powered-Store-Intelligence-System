@@ -1,26 +1,40 @@
 from __future__ import annotations
+"""
+Tracking, Re-ID, and staff detection for one camera clip.
+"""
 import json
 import os
 import time
-from collections import defaultdict
 from typing import Optional
 import numpy as np
 
-# Load store layout once for HSV staff params
-_LAYOUT_PATH = os.getenv("LAYOUT_JSON", "./config/store_layout.json")
-with open(_LAYOUT_PATH) as f:
-    _LAYOUT = json.load(f)
+_LAYOUT_PATH  = os.getenv("LAYOUT_JSON", "./config/store_layout.json")
+_LAYOUT_CACHE: dict | None = None
+
+
+def _get_layout() -> dict:
+    """Load layout JSON once and cache it."""
+    global _LAYOUT_CACHE
+    if _LAYOUT_CACHE is None:
+        # Resolve path relative to project root if relative
+        path = _LAYOUT_PATH
+        if not os.path.isabs(path):
+            project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+            path = os.path.normpath(os.path.join(project_root, path))
+        with open(path) as f:
+            _LAYOUT_CACHE = json.load(f)
+    return _LAYOUT_CACHE
 
 
 def _get_staff_hsv(store_id: str) -> tuple[list, list]:
-    """Return HSV lower/upper bounds for staff uniform detection."""
-    store = _LAYOUT["stores"].get(store_id, {})
-    hsv = store.get("staff_uniform_hsv", {"lower": [0, 0, 0], "upper": [180, 60, 80]})
+    """Return HSV lower/upper bounds for staff uniform detection from layout."""
+    store = _get_layout()["stores"].get(store_id, {})
+    hsv   = store.get("staff_uniform_hsv", {"lower": [0, 0, 0], "upper": [180, 60, 80]})
     return hsv["lower"], hsv["upper"]
 
 
 class StaffDetector:
-    """Detects staff by uniform colour in the billing area frame."""
+    """Detects staff by uniform colour using HSV range configured per store."""
 
     def __init__(self, store_id: str):
         self.lower, self.upper = _get_staff_hsv(store_id)
@@ -28,48 +42,57 @@ class StaffDetector:
         self._upper_np = np.array(self.upper, dtype=np.uint8)
 
     def is_staff(self, frame: np.ndarray, bbox: tuple[int, int, int, int]) -> bool:
-        """Check if the dominant colour of a bounding box matches staff uniform."""
+        """Return True if >25% of bbox pixels match the staff uniform HSV range."""
         import cv2
         x1, y1, x2, y2 = bbox
-        # Clamp to frame bounds
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
         if x2 <= x1 or y2 <= y1:
             return False
-        crop = frame[y1:y2, x1:x2]
-        hsv  = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self._lower_np, self._upper_np)
-        # Staff if > 25% of crop pixels match uniform colour
+        crop  = frame[y1:y2, x1:x2]
+        hsv   = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        mask  = cv2.inRange(hsv, self._lower_np, self._upper_np)
         ratio = np.count_nonzero(mask) / (mask.size or 1)
         return ratio > 0.25
 
 
 class ReIDTracker:
     """
-    Simple centroid-based Re-ID.
-    Maps numeric track_id → visitor_id string. Re-uses visitor_id if the centroid
-    re-appears within REENTRY_WINDOW_SECONDS after an EXIT.
+    Centroid-based Re-ID: maps ByteTrack integer track_id → stable visitor_id string.
+
+    When a new track appears near the entry line, we check the recently-exited pool.
+    If a match is found (centroid within REENTRY_DIST_PX, within REENTRY_WINDOW_S),
+    we reuse the existing visitor_id and flag is_reentry=True.
     """
 
-    REENTRY_WINDOW_S = 300   # 5-minute window for re-entry detection
-    REENTRY_DIST_PX  = 200   # max centroid distance to consider same person
+    REENTRY_WINDOW_S = 300   # 5-minute re-entry window
+    REENTRY_DIST_PX  = 200   # max centroid distance for same-person match
 
     def __init__(self):
-        self._track_to_visitor: dict[int, str]   = {}
-        self._exited: list[dict]                  = []  # {visitor_id, centroid, exited_at}
-        self._visitor_seq: dict[str, int]         = defaultdict(int)
+        self._track_to_visitor: dict[int, str]       = {}
+        self._track_last_centroid: dict[int, tuple]  = {}  # track_id → (cx, cy)
+        self._exited: list[dict]                     = []  # {visitor_id, centroid, exited_at}
+        self._seq: int                               = 0   # monotonic counter for unique IDs
+
+    def _next_id(self) -> str:
+        """Generate a new unique visitor ID."""
+        self._seq += 1
+        return f"VIS_{self._seq:04d}"
 
     def get_visitor_id(
         self, track_id: int, centroid: tuple[float, float]
     ) -> tuple[str, bool]:
         """
         Return (visitor_id, is_reentry).
-        Assigns a new visitor_id on first sight, or re-uses one from exited list.
+        On first sight: check exited pool for re-entry match; else assign new ID.
         """
+        # Always update last-known centroid for this track
+        self._track_last_centroid[track_id] = centroid
+
         if track_id in self._track_to_visitor:
             return self._track_to_visitor[track_id], False
 
-        # Check exited visitors for Re-ID
+        # Search recently-exited visitors for re-entry match
         now = time.time()
         for record in self._exited:
             if now - record["exited_at"] > self.REENTRY_WINDOW_S:
@@ -82,12 +105,21 @@ class ReIDTracker:
                 return visitor_id, True  # re-entry detected
 
         # New visitor
-        visitor_id = f"VIS_{track_id:04d}"
+        visitor_id = self._next_id()
         self._track_to_visitor[track_id] = visitor_id
         return visitor_id, False
 
+    def get_last_centroid(self, track_id: int) -> Optional[tuple[float, float]]:
+        """
+        Return last known centroid for a track.
+
+        FIX: Returns None if track_id was never seen (prevents KeyError crash in
+        detect.py's vanished-track handler).
+        """
+        return self._track_last_centroid.get(track_id)
+
     def mark_exit(self, track_id: int, centroid: tuple[float, float]) -> None:
-        """Record exit so we can detect re-entry."""
+        """Record exit so we can detect re-entry within the time window."""
         visitor_id = self._track_to_visitor.get(track_id)
         if visitor_id:
             self._exited.append({
@@ -95,20 +127,15 @@ class ReIDTracker:
                 "centroid":   centroid,
                 "exited_at":  time.time(),
             })
-            # Remove stale records to save memory
-            cutoff = time.time() - self.REENTRY_WINDOW_S
+            # Evict stale records to bound memory usage
+            cutoff       = time.time() - self.REENTRY_WINDOW_S
             self._exited = [r for r in self._exited if r["exited_at"] > cutoff]
-
-    def next_session_seq(self, visitor_id: str) -> int:
-        """Increment and return the event sequence number for a visitor session."""
-        self._visitor_seq[visitor_id] += 1
-        return self._visitor_seq[visitor_id]
 
 
 class CameraTracker:
     """
-    Wraps supervision ByteTrack + ReIDTracker for a single camera.
-    Stores per-track state: current zone, zone entry time, dwell accumulators.
+    Wraps supervision ByteTrack for one camera.
+    Exposes update() and centroid() only — state management lives in detect.py.
     """
 
     def __init__(self, store_id: str, camera_id: str, fps: float = 15.0):
@@ -116,25 +143,14 @@ class CameraTracker:
         self.store_id  = store_id
         self.camera_id = camera_id
         self.fps       = fps
-        self.tracker   = sv.ByteTrack(lost_track_buffer=int(fps * 3))  # 3s buffer
-        self.reid      = ReIDTracker()
-        self.staff_det = StaffDetector(store_id)
+        # 3-second lost-track buffer handles brief occlusions behind displays
+        self.tracker   = sv.ByteTrack(lost_track_buffer=int(fps * 3))
 
-        # Per-track state
-        self._zone_entry_frame: dict[int, int]  = {}   # track_id → frame when entered zone
-        self._current_zone: dict[int, str]       = {}   # track_id → zone_id
-        self._last_dwell_frame: dict[int, int]   = {}   # track_id → last ZONE_DWELL emit frame
-        self._crossed_entry: set[int]            = set()  # tracks that crossed entry line
-
-    def update(
-        self, detections, frame_idx: int, frame: np.ndarray
-    ):
-        """
-        Feed YOLO detections into ByteTrack. Returns supervision Detections with track_ids.
-        """
+    def update(self, detections, frame_idx: int, frame: np.ndarray):
+        """Feed YOLO detections into ByteTrack. Returns sv.Detections with tracker_id."""
         return self.tracker.update_with_detections(detections)
 
     def centroid(self, bbox) -> tuple[float, float]:
-        """Compute centroid from xyxy bounding box."""
+        """Compute bounding-box centroid from xyxy array."""
         x1, y1, x2, y2 = bbox
-        return ((x1 + x2) / 2, (y1 + y2) / 2)
+        return ((x1 + x2) / 2.0, (y1 + y2) / 2.0)

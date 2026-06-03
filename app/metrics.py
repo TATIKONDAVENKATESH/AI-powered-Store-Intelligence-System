@@ -24,15 +24,14 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
     )
     unique_visitors: int = result.scalar() or 0
 
-    # Total POS transactions for this store today
+    # Total POS transactions for this store
     result = await db.execute(
         text("SELECT COUNT(*) FROM pos_transactions WHERE store_id = :sid"),
         {"sid": store_id},
     )
     total_transactions: int = result.scalar() or 0
 
-    # Conversion: visitor in any BILLING zone within 5 min before a POS transaction
-    # zone_id LIKE '%BILLING%' covers ST1076_Z_BILLING_01 and ST1008_Z_BILLING_01
+    # Converted visitors: in any BILLING zone within 5 min before a POS transaction
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT e.visitor_id)
@@ -40,7 +39,7 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
             INNER JOIN pos_transactions p
                 ON  p.store_id = e.store_id
                 AND datetime(p.timestamp) >= datetime(e.timestamp)
-                AND datetime(p.timestamp) <= datetime(e.timestamp, '+300 seconds')
+                AND datetime(p.timestamp) <= datetime(e.timestamp, '+1800 seconds')
             WHERE e.store_id = :sid
               AND e.zone_id LIKE '%BILLING%'
               AND e.is_staff = 0
@@ -78,7 +77,7 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
         for row in zone_rows
     ]
 
-    # Current queue depth — visitors with BILLING_QUEUE_JOIN but no EXIT or ABANDON
+    # Current queue depth — joined but not yet exited or abandoned
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT visitor_id)
@@ -96,7 +95,7 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
     )
     queue_depth: int = result.scalar() or 0
 
-    # Abandonment rate
+    # Abandonment rate = abandoned / joined
     result = await db.execute(
         text("""
             SELECT
@@ -107,8 +106,8 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
         """),
         {"sid": store_id},
     )
-    row = result.fetchone()
-    joined    = row[0] or 0
+    row      = result.fetchone()
+    joined   = row[0] or 0
     abandoned = row[1] or 0
     abandonment_rate = round(abandoned / joined, 4) if joined > 0 else 0.0
 

@@ -1,76 +1,74 @@
-# PROMPT: "Write async pytest tests for a FastAPI /events/ingest endpoint. Cover: successful
-# batch ingest, idempotency (same payload twice returns duplicate count), partial success
-# when one event is malformed, batch size limit of 500."
-# CHANGES MADE: Used ST1076/ST1008 store IDs; added test for mixed valid+invalid batch;
-# removed dependency on requests library in favour of httpx AsyncClient from conftest.
+# PROMPT: "Write a pytest conftest.py that provides async fixtures for FastAPI testing with
+# in-memory SQLite. Need: a 'client' fixture (httpx AsyncClient bound to the app),
+# a 'db_session' fixture (same in-memory DB the client uses), both async, both reset
+# between tests."
+# CHANGES MADE: Patched main_mod engine/session BEFORE importing routes so schema SQL
+# path resolves correctly; used absolute path for schema.sql; added db_session fixture
+# that shares the same engine so inserts via db_session are visible to the client.
 
+from __future__ import annotations
+import os
+import sys
 import pytest
-import uuid
+import pytest_asyncio
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+import httpx
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+
+# Build in-memory engine BEFORE importing app.main so the patch takes effect
+TEST_ENGINE  = create_async_engine("sqlite+aiosqlite:///:memory:", echo=False)
+TEST_SESSION = async_sessionmaker(TEST_ENGINE, expire_on_commit=False)
+
+import app.main as main_mod
+
+# Redirect module-level engine and session to in-memory test DB
+main_mod.engine       = TEST_ENGINE
+main_mod.SessionLocal = TEST_SESSION
+
+_SCHEMA_PATH = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "storage", "schema.sql")
+)
 
 
-def _make_event(store_id: str = "ST1076", camera_id: str = "CAM3") -> dict:
-    return {
-        "event_id":   str(uuid.uuid4()),
-        "store_id":   store_id,
-        "camera_id":  camera_id,
-        "visitor_id": f"VIS_{uuid.uuid4().hex[:4]}",
-        "event_type": "ENTRY",
-        "timestamp":  "2026-03-08T13:00:00Z",
-        "confidence": 0.9,
-    }
+async def _apply_schema():
+    """Apply the real schema SQL to the in-memory test DB."""
+    with open(_SCHEMA_PATH, "r") as f:
+        schema = f.read()
+    async with TEST_ENGINE.begin() as conn:
+        for stmt in schema.split(";"):
+            s = stmt.strip()
+            if s:
+                await conn.execute(text(s))
 
 
-@pytest.mark.asyncio
-async def test_ingest_single_event(client):
-    resp = await client.post("/events/ingest", json={"events": [_make_event()]})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["accepted"] == 1
-    assert body["rejected"] == 0
-    assert body["duplicates"] == 0
+async def _clear_tables():
+    """Delete all rows between tests to prevent state bleed."""
+    async with TEST_ENGINE.begin() as conn:
+        await conn.execute(text("DELETE FROM events"))
+        await conn.execute(text("DELETE FROM pos_transactions"))
 
 
-@pytest.mark.asyncio
-async def test_ingest_idempotent(client):
-    """Sending same payload twice must not double-count."""
-    event = _make_event()
-    await client.post("/events/ingest", json={"events": [event]})
-    resp2 = await client.post("/events/ingest", json={"events": [event]})
-    assert resp2.status_code == 200
-    body = resp2.json()
-    assert body["duplicates"] == 1
-    assert body["accepted"] == 0
+@pytest_asyncio.fixture
+async def db_session():
+    """
+    Async DB session using the same in-memory engine as the test client.
+    Inserts made via this fixture are immediately visible to API endpoints.
+    """
+    await _apply_schema()
+    async with TEST_SESSION() as session:
+        yield session
+    await _clear_tables()
 
 
-@pytest.mark.asyncio
-async def test_ingest_batch_multiple_events(client):
-    events = [_make_event() for _ in range(10)]
-    resp = await client.post("/events/ingest", json={"events": events})
-    assert resp.status_code == 200
-    assert resp.json()["accepted"] == 10
-
-
-@pytest.mark.asyncio
-async def test_ingest_both_stores(client):
-    events = [
-        _make_event(store_id="ST1076", camera_id="CAM3"),
-        _make_event(store_id="ST1008", camera_id="CAM_ENTRY_1"),
-    ]
-    resp = await client.post("/events/ingest", json={"events": events})
-    assert resp.status_code == 200
-    assert resp.json()["accepted"] == 2
-
-
-@pytest.mark.asyncio
-async def test_ingest_batch_size_limit(client):
-    """Batches above 500 events must be rejected at validation."""
-    events = [_make_event() for _ in range(501)]
-    resp = await client.post("/events/ingest", json={"events": events})
-    assert resp.status_code == 422  # Pydantic max_length violation
-
-
-@pytest.mark.asyncio
-async def test_ingest_empty_batch(client):
-    resp = await client.post("/events/ingest", json={"events": []})
-    assert resp.status_code == 200
-    assert resp.json()["accepted"] == 0
+@pytest_asyncio.fixture
+async def client(db_session):
+    """
+    Async HTTP client wired to the FastAPI app with in-memory SQLite.
+    Depends on db_session so schema is applied and tables are cleared per test.
+    """
+    transport = httpx.ASGITransport(app=main_mod.app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        yield c

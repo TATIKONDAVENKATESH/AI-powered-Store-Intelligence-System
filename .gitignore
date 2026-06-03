@@ -1,70 +1,89 @@
 # Python
-__pycache__/
+
+**pycache**/
 *.py[cod]
 *.pyo
 *.pyd
 
 # Virtual environments
+
 venv/
 .venv/
 env/
 
 # IDE
+
 .idea/
 .vscode/
 *.iml
 
 # OS files
+
 .DS_Store
 Thumbs.db
 
 # Environment variables
+
 .env
 
 # Logs
+
 logs/
 *.log
 
 # Test cache
+
 .pytest_cache/
 .coverage
 htmlcov/
 
 # Build artifacts
+
 build/
 dist/
 *.egg-info/
 
 # Database
+
 storage/*.db
 storage/*.sqlite
 storage/*.sqlite3
 
-# Generated events
-data/generated_events/
+# Generated events (keep sample file)
+
+data/generated_events/*.jsonl
+!data/generated_events/sample_events.jsonl
 
 # Model weights
+
 models/*.pt
 models/*.pth
+yolov8n.pt
 
 # YOLO cache
+
 runs/
 
 # Streamlit cache
+
 .streamlit/cache/
 
 # Temporary files
+
 tmp/
 temp/
 
-# Video files (large dataset)
-data/videos/
+# Large video datasets
+
+data/Videos/
+
+# Generated frames
+
+data/camera_frames/
 
 # Docker
+
 *.pid
 
 docs/DESIGN.md
 docs/CHOICES.md
-data/pos_transactions.csv
-data/camera_frames/
-

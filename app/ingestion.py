@@ -12,8 +12,7 @@ from app.models import StoreEvent, IngestResponse
 
 logger = logging.getLogger(__name__)
 
-# IST timezone for POS CSV date/time conversion
-_IST = ZoneInfo("Asia/Kolkata")
+_IST = ZoneInfo("Asia/Kolkata")  # POS CSV timestamps are in IST
 
 
 async def ingest_events(
@@ -21,8 +20,8 @@ async def ingest_events(
     db: AsyncSession,
 ) -> IngestResponse:
     """Validate, deduplicate, and persist a batch of events. Idempotent by event_id."""
-    accepted = 0
-    rejected = 0
+    accepted   = 0
+    rejected   = 0
     duplicates = 0
     errors: List[str] = []
     now_utc = datetime.now(timezone.utc).isoformat()
@@ -90,13 +89,16 @@ async def ingest_events(
 
 async def load_pos_transactions(csv_path: str, db: AsyncSession) -> int:
     """
-    Load POS CSV into pos_transactions table.
-    Groups product-level rows by order_id — each unique order_id is one transaction.
-    POS CSV columns: order_id, order_date, order_time, store_id, product_id, brand_name, total_amount
-    Dates are DD-MM-YYYY IST, converted to UTC ISO-8601.
-    Idempotent — skips order_ids already in DB.
+    Load POS CSV into pos_transactions table. Idempotent — skips already-loaded rows.
+
+    Actual POS CSV columns (from sample file):
+      order_id, order_date, order_time, store_id, product_id, brand_name, total_amount
+
+    One row per SKU — we aggregate by (store_id + order_date + order_time) composite key
+    since there is no invoice_number in this dataset.
+
+    Dates are DD-MM-YYYY in IST → converted to UTC ISO-8601.
     """
-    # Aggregate product-level rows into one record per order_id
     orders: dict[str, dict] = defaultdict(
         lambda: {"total": 0.0, "date": "", "time": "", "store_id": ""}
     )
@@ -105,44 +107,53 @@ async def load_pos_transactions(csv_path: str, db: AsyncSession) -> int:
         with open(csv_path, newline="", encoding="utf-8") as f:
             reader = csv.DictReader(f)
             for row in reader:
-                order_id = row.get("order_id", "").strip()
-                if not order_id:
-                    continue
-                # Last row for this order_id sets the date/time/store (all rows identical)
-                orders[order_id]["date"]     = row.get("order_date", "").strip()
-                orders[order_id]["time"]     = row.get("order_time", "").strip()
-                orders[order_id]["store_id"] = row.get("store_id", "").strip()
+                order_date   = row.get("order_date", "").strip()
+                order_time   = row.get("order_time", "").strip()
+                store_id_raw = row.get("store_id", "").strip()
+
+                # Use invoice_number if present (richer test CSVs), else composite key
+                invoice = row.get("invoice_number", "").strip()
+                if invoice:
+                    txn_key = invoice
+                elif store_id_raw and order_date and order_time:
+                    txn_key = f"{store_id_raw}_{order_date}_{order_time}"
+                else:
+                    continue  # skip rows with insufficient identifying info
+
+                orders[txn_key]["date"]     = order_date
+                orders[txn_key]["time"]     = order_time
+                orders[txn_key]["store_id"] = store_id_raw
                 try:
-                    orders[order_id]["total"] += float(row.get("total_amount", 0) or 0)
+                    orders[txn_key]["total"] += float(row.get("total_amount", 0) or 0)
                 except ValueError:
-                    pass
+                    pass  # non-numeric total_amount — amount stays at 0
+
     except FileNotFoundError:
         logger.warning("POS CSV not found at %s — skipping", csv_path)
         return 0
 
     loaded = 0
-    for order_id, data in orders.items():
+    for txn_key, data in orders.items():
         try:
             dt_str = f"{data['date']} {data['time']}"
-            # Parse DD-MM-YYYY HH:MM:SS (actual CSV format)
-            for fmt in ("%d-%m-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
+            dt_ist = None
+            for fmt in ("%d-%m-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S", "%d-%m-%Y %H:%M"):
                 try:
                     dt_ist = datetime.strptime(dt_str, fmt).replace(tzinfo=_IST)
                     break
                 except ValueError:
                     continue
-            else:
+
+            if dt_ist is None:
                 logger.warning("Cannot parse POS date/time: %s", dt_str)
                 continue
 
-            dt_utc = dt_ist.astimezone(timezone.utc).isoformat()
-
-            # Use store_id directly from CSV (ST1008, ST1076, etc.)
+            dt_utc   = dt_ist.astimezone(timezone.utc).isoformat()
             store_id = data["store_id"] or "ST1008"
 
             exists = await db.execute(
                 text("SELECT 1 FROM pos_transactions WHERE transaction_id = :tid"),
-                {"tid": order_id},
+                {"tid": txn_key},
             )
             if exists.fetchone():
                 continue
@@ -154,7 +165,7 @@ async def load_pos_transactions(csv_path: str, db: AsyncSession) -> int:
                     VALUES (:tid, :sid, :ts, :bv)
                 """),
                 {
-                    "tid": order_id,
+                    "tid": txn_key,
                     "sid": store_id,
                     "ts":  dt_utc,
                     "bv":  round(data["total"], 2),
@@ -163,7 +174,7 @@ async def load_pos_transactions(csv_path: str, db: AsyncSession) -> int:
             loaded += 1
 
         except Exception as exc:
-            logger.warning("POS order error %s: %s", order_id, exc)
+            logger.warning("POS order error %s: %s", txn_key, exc)
 
     await db.commit()
     logger.info("Loaded %d POS transactions", loaded)

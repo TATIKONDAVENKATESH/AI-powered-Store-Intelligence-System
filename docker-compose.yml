@@ -4,29 +4,28 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    image: store-intelligence:latest       # named so dashboard reuses the same built image
+    image: store-intelligence:latest
     container_name: store_intelligence_api
     ports:
       - "8000:8000"
     volumes:
-      - ./storage:/app/storage             # SQLite DB persists on host
-      - ./data:/app/data                   # videos + POS CSV + generated events (NOT in image)
-      - ./config:/app/config               # store_layout.json
-      - ./pipeline:/app/pipeline           # pipeline scripts (for running detect.py in container)
+      - ./storage:/app/storage          # SQLite DB persists on host
+      - ./data:/app/data                # videos + POS CSV + generated events
+      - ./config:/app/config            # store_layout.json
+      - ./pipeline:/app/pipeline        # pipeline scripts for in-container use
     env_file:
       - .env
     environment:
-      - DATABASE_URL=sqlite:///./storage/store_intelligence.db
+      - DATABASE_URL=sqlite+aiosqlite:///./storage/store_intelligence.db  # FIXED: must have aiosqlite driver
       - POS_CSV=./data/pos_transactions.csv
       - LAYOUT_JSON=./config/store_layout.json
       - YOLO_MODEL=yolov8n.pt
-      - YOLO_CONFIDENCE=0.4
+      - YOLO_CONFIDENCE=0.25
       - API_HOST=0.0.0.0
       - API_PORT=8000
       - LOG_LEVEL=INFO
       - EVENTS_DIR=./data/generated_events
-      - STORE_ID=STORE_BLR_002
-      - API_URL=http://localhost:8000       # used by ingest scripts run inside this container
+      - API_URL=http://localhost:8000
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
     healthcheck:
@@ -35,20 +34,20 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 15s                    # give uvicorn time to start before first check
+      start_period: 20s
 
   dashboard:
-    image: store-intelligence:latest       # reuses the image built by api — NO second build
+    image: store-intelligence:latest     # reuses image built by api service
     container_name: store_intelligence_dashboard
     ports:
       - "8501:8501"
     volumes:
-      - ./dashboard:/app/dashboard         # mount only dashboard code
+      - ./dashboard:/app/dashboard
     env_file:
       - .env
     environment:
-      - API_URL=http://api:8000            # service-name DNS inside Docker network
-      - STORE_ID=STORE_BLR_002
+      - API_URL=http://api:8000          # service-name DNS inside Docker network
+      - STORE_IDS=ST1076,ST1008          # FIXED: correct store IDs
     depends_on:
       api:
         condition: service_healthy
