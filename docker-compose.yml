@@ -19,7 +19,7 @@ services:
       - DATABASE_URL=sqlite+aiosqlite:///./storage/store_intelligence.db  # FIXED: must have aiosqlite driver
       - POS_CSV=./data/pos_transactions.csv
       - LAYOUT_JSON=./config/store_layout.json
-      - YOLO_MODEL=yolov8n.pt
+      - YOLO_MODEL=./models/yolov8n.pt
       - YOLO_CONFIDENCE=0.25
       - API_HOST=0.0.0.0
       - API_PORT=8000

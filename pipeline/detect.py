@@ -25,7 +25,7 @@ from pipeline.tracker import CameraTracker, StaffDetector, ReIDTracker
 from pipeline.emit import EventEmitter, build_event, EVENTS_DIR
 
 LAYOUT_JSON = os.getenv("LAYOUT_JSON", "./config/store_layout.json")
-YOLO_MODEL  = os.getenv("YOLO_MODEL", "yolov8n.pt")
+YOLO_MODEL  = os.getenv("YOLO_MODEL", "./models/yolov8n.pt")
 # 0.25 works better than 0.4 on anonymised (face-blurred) footage
 YOLO_CONF   = float(os.getenv("YOLO_CONFIDENCE", "0.25"))
 
