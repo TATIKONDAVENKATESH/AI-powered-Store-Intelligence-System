@@ -40,8 +40,8 @@ docker compose up --build
 bash pipeline/run_sample.sh      # Linux/macOS
 pipeline\run_sample.bat          # Windows
 
-open http://localhost:8501        # dashboard
-open http://localhost:8000/docs   # API docs
+Dashboard: http://localhost:8501
+API Docs:  http://localhost:8000/docs
 ```
 
 ### Option B — Full pipeline (videos required)
@@ -89,8 +89,11 @@ data/Videos/
 - `data/pos_transactions.csv` — POS data (columns: `order_id, order_date, order_time, store_id, product_id, brand_name, total_amount`)
 - `data/generated_events/all_events.jsonl` — 1,479 pre-generated events from both stores
 - `data/generated_events/sample_events.jsonl` — 13 events for quick testing
+
+The sample event file allows viewers to test the API and dashboard
+without running YOLO inference or providing CCTV footage.
+
 - `config/store_layout.json` — zone polygons, camera roles, staff HSV params
-- `models/yolov8n.pt` — bundled YOLO weights
 
 ---
 
@@ -170,7 +173,6 @@ store-intelligence/
 ├── tests/          8 test files + conftest.py
 ├── docs/           DESIGN.md  CHOICES.md
 ├── dashboard/      streamlit_app.py
-├── models/         yolov8n.pt
 ├── Dockerfile
 ├── docker-compose.yml
 └── requirements.txt

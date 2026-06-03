@@ -53,6 +53,7 @@ storage/*.sqlite3
 
 data/generated_events/*.jsonl
 !data/generated_events/sample_events.jsonl
+!data/generated_events/all_events.jsonl
 
 # Model weights
 
