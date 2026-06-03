@@ -1,275 +1,252 @@
 from __future__ import annotations
 """
-detect.py — Process one CCTV video file and emit structured events.
-
+Main detection pipeline.
 Usage:
-    python pipeline/detect.py --camera CAM_ENTRY_01 --video data/videos/entry_camera.mp4
+  python pipeline/detect.py --store ST1076 --camera CAM3 --video "data/videos/CAM 3 - entry.mp4"
+  python pipeline/detect.py --store ST1008 --camera CAM_ENTRY_1 --video "data/videos/entry 1.mp4"
 """
-
 import argparse
 import json
-import logging
 import os
 import sys
 from datetime import datetime, timezone
 
 import cv2
 import numpy as np
-from ultralytics import YOLO
 import supervision as sv
+from ultralytics import YOLO
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+# Add project root to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pipeline.tracker import CameraTracker, StaffDetector
-from pipeline.emit import EventEmitter, build_event
+from pipeline.emit import EventEmitter, build_event, EVENTS_DIR
 
-logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"),
-                    format="%(asctime)s [%(levelname)s] %(message)s")
-logger = logging.getLogger(__name__)
+# Config paths
+LAYOUT_JSON   = os.getenv("LAYOUT_JSON", "./config/store_layout.json")
+YOLO_MODEL    = os.getenv("YOLO_MODEL", "yolov8n.pt")
+YOLO_CONF     = float(os.getenv("YOLO_CONFIDENCE", "0.4"))
 
-LAYOUT_JSON = os.getenv("LAYOUT_JSON", "./config/store_layout.json")
-YOLO_MODEL  = os.getenv("YOLO_MODEL", "models/yolov8n.pt")
-YOLO_CONF   = float(os.getenv("YOLO_CONFIDENCE", "0.4"))
-
-# Clip anchor: treat frame 0 as this UTC wall-clock time (Brigade Bangalore dataset date)
-CLIP_START_UTC = datetime(2026, 4, 10, 10, 0, 0, tzinfo=timezone.utc)
+# Zone dwell emit interval (30 seconds × fps converted per-frame)
+DWELL_EMIT_INTERVAL_S = 30
 
 
-def load_layout(camera_id: str) -> dict:
-    """Return zones, entry-line config, and timing params for this camera."""
+def load_layout(store_id: str) -> dict:
     with open(LAYOUT_JSON) as f:
         layout = json.load(f)
-    camera_zones = [z for z in layout["zones"] if z["camera_id"] == camera_id]
-    entry_line = layout.get("entry_line")
-    if entry_line and entry_line.get("camera_id") != camera_id:
-        entry_line = None
-    return {
-        "zones": camera_zones,
-        "entry_line": entry_line,
-        "dwell_interval": layout.get("dwell_emit_interval_seconds", 30),
-        "reentry_window": layout.get("reentry_window_seconds", 300),
-        "billing_min_depth": layout.get("billing_queue_min_depth", 1),
-    }
+    return layout["stores"][store_id]
 
 
-def centroid(bbox: np.ndarray) -> tuple[float, float]:
-    return (bbox[0] + bbox[2]) / 2.0, (bbox[1] + bbox[3]) / 2.0
+def get_camera_config(store_layout: dict, camera_id: str) -> dict:
+    return store_layout["cameras"][camera_id]
 
 
-def point_in_polygon(px: float, py: float, polygon: list) -> bool:
-    pts = np.array(polygon, dtype=np.float32)
-    return cv2.pointPolygonTest(pts, (float(px), float(py)), False) >= 0
+def get_zones_for_camera(store_layout: dict, camera_id: str) -> list[dict]:
+    return store_layout.get("zones", {}).get(camera_id, [])
 
 
-def line_crossed(prev_y: float, curr_y: float, line_y: float) -> str:
-    """Returns 'entry', 'exit', or '' based on vertical crossing direction."""
-    if prev_y < line_y <= curr_y:
-        return "entry"
-    if prev_y > line_y >= curr_y:
-        return "exit"
-    return ""
+def point_in_polygon(point: tuple[float, float], polygon: list[list[int]]) -> bool:
+    """Check if a point is inside a polygon using OpenCV."""
+    pts  = np.array(polygon, dtype=np.float32)
+    dist = cv2.pointPolygonTest(pts, point, False)
+    return dist >= 0
 
 
-def process_video(camera_id: str, video_path: str) -> int:
-    layout    = load_layout(camera_id)
-    zones     = layout["zones"]
-    entry_cfg = layout["entry_line"]
-    dwell_s   = layout["dwell_interval"]
+def process_clip(
+    store_id: str,
+    camera_id: str,
+    video_path: str,
+    clip_start_utc: datetime,
+) -> str:
+    """Process one video clip and write JSONL events. Returns output path."""
+    store_layout   = load_layout(store_id)
+    cam_config     = get_camera_config(store_layout, camera_id)
+    cam_role       = cam_config["role"]               # entry / zone / billing
+    zones          = get_zones_for_camera(store_layout, camera_id)
+    entry_line_y   = cam_config.get("entry_line_y", 540)
 
-    logger.info("Loading YOLO: %s", YOLO_MODEL)
-    model = YOLO(YOLO_MODEL)
+    model          = YOLO(YOLO_MODEL)
+    cap            = cv2.VideoCapture(video_path)
+    fps            = cap.get(cv2.CAP_PROP_FPS) or 15.0
+    tracker        = CameraTracker(store_id, camera_id, fps)
+    staff_det      = StaffDetector(store_id)
+    emitter        = EventEmitter(camera_id)
 
-    cap = cv2.VideoCapture(video_path)
-    if not cap.isOpened():
-        raise RuntimeError(f"Cannot open: {video_path}")
+    # Re-ID and session state
+    from pipeline.tracker import ReIDTracker
+    reid = ReIDTracker()
 
-    fps          = cap.get(cv2.CAP_PROP_FPS) or 15.0
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    dwell_frames = int(dwell_s * fps)
+    # Per-track state for this clip
+    prev_centroid_y: dict[int, float]  = {}  # for entry/exit direction detection
+    zone_entry_frame: dict[int, int]   = {}  # track_id → frame entered current zone
+    current_zone: dict[int, str]        = {}  # track_id → current zone_id
+    last_dwell_frame: dict[int, int]    = {}  # track_id → frame of last ZONE_DWELL emit
+    has_entered: set[int]               = set()  # tracks that crossed entry inbound
+    billing_join_frame: dict[int, int]  = {}   # track_id → frame entered billing
+    queue_depth: int                    = 0
+    session_seq: dict[int, int]         = {}
 
-    logger.info("Camera=%s  fps=%.1f  frames=%d", camera_id, fps, total_frames)
-
-    tracker        = CameraTracker(camera_id=camera_id, fps=fps, frame_rate=int(fps))
-    staff_detector = StaffDetector(camera_id=camera_id)
-    emitter        = EventEmitter(camera_id=camera_id)
-
-    prev_cy_map: dict[str, float] = {}
-    entered:      set[str]        = set()
-    exited:       set[str]        = set()
-    billing_queue: set[str]       = set()
+    def seq(track_id: int) -> int:
+        session_seq[track_id] = session_seq.get(track_id, 0) + 1
+        return session_seq[track_id]
 
     frame_idx = 0
+    dwell_interval_frames = int(DWELL_EMIT_INTERVAL_S * fps)
 
     while True:
         ret, frame = cap.read()
         if not ret:
             break
+
+        # YOLO inference — detect persons only (class 0)
+        results     = model(frame, conf=YOLO_CONF, classes=[0], verbose=False)[0]
+        detections  = sv.Detections.from_ultralytics(results)
+        tracked     = tracker.update(detections, frame_idx, frame)
+
+        active_ids: set[int] = set()
+
+        for i, track_id in enumerate(tracked.tracker_id or []):
+            if track_id is None:
+                continue
+            active_ids.add(track_id)
+
+            bbox       = tracked.xyxy[i].astype(int)
+            conf       = float(tracked.confidence[i]) if tracked.confidence is not None else YOLO_CONF
+            cx, cy     = tracker.centroid(bbox)
+            is_staff   = staff_det.is_staff(frame, tuple(bbox))
+
+            visitor_id, is_reentry = reid.get_visitor_id(track_id, (cx, cy))
+
+            # --- Entry / Exit (entry cameras only) ---
+            if cam_role == "entry":
+                prev_y = prev_centroid_y.get(track_id)
+                if prev_y is not None:
+                    if prev_y < entry_line_y and cy >= entry_line_y:
+                        # Crossed line downward = ENTRY (into store)
+                        if is_reentry:
+                            emitter.emit(build_event(
+                                camera_id, visitor_id, "REENTRY", frame_idx, fps,
+                                clip_start_utc, confidence=conf, is_staff=is_staff,
+                                session_seq=seq(track_id),
+                            ))
+                        else:
+                            has_entered.add(track_id)
+                            emitter.emit(build_event(
+                                camera_id, visitor_id, "ENTRY", frame_idx, fps,
+                                clip_start_utc, confidence=conf, is_staff=is_staff,
+                                session_seq=seq(track_id),
+                            ))
+                    elif prev_y >= entry_line_y and cy < entry_line_y:
+                        # Crossed line upward = EXIT (out of store)
+                        reid.mark_exit(track_id, (cx, cy))
+                        emitter.emit(build_event(
+                            camera_id, visitor_id, "EXIT", frame_idx, fps,
+                            clip_start_utc, confidence=conf, is_staff=is_staff,
+                            session_seq=seq(track_id),
+                        ))
+                prev_centroid_y[track_id] = cy
+
+            # --- Zone detection (zone and billing cameras) ---
+            if cam_role in ("zone", "billing"):
+                detected_zone: str | None = None
+                for zone in zones:
+                    if point_in_polygon((cx, cy), zone["polygon"]):
+                        detected_zone = zone["zone_id"]
+                        break
+
+                prev_zone = current_zone.get(track_id)
+
+                if detected_zone != prev_zone:
+                    # Zone exit
+                    if prev_zone:
+                        dwell_frames = frame_idx - zone_entry_frame.get(track_id, frame_idx)
+                        dwell_ms     = int((dwell_frames / fps) * 1000)
+                        emitter.emit(build_event(
+                            camera_id, visitor_id, "ZONE_EXIT", frame_idx, fps,
+                            clip_start_utc, zone_id=prev_zone, dwell_ms=dwell_ms,
+                            confidence=conf, is_staff=is_staff, session_seq=seq(track_id),
+                        ))
+                        # Billing queue abandon — left billing without POS match
+                        if "BILLING" in prev_zone and not is_staff:
+                            queue_depth = max(0, queue_depth - 1)
+                            emitter.emit(build_event(
+                                camera_id, visitor_id, "BILLING_QUEUE_ABANDON", frame_idx, fps,
+                                clip_start_utc, zone_id=prev_zone, dwell_ms=dwell_ms,
+                                confidence=conf, is_staff=is_staff,
+                                queue_depth=queue_depth, session_seq=seq(track_id),
+                            ))
+
+                    # Zone enter
+                    if detected_zone:
+                        current_zone[track_id]      = detected_zone
+                        zone_entry_frame[track_id]  = frame_idx
+                        last_dwell_frame[track_id]  = frame_idx
+
+                        if "BILLING" in detected_zone and not is_staff:
+                            queue_depth += 1
+                            emitter.emit(build_event(
+                                camera_id, visitor_id, "BILLING_QUEUE_JOIN", frame_idx, fps,
+                                clip_start_utc, zone_id=detected_zone,
+                                confidence=conf, is_staff=is_staff,
+                                queue_depth=queue_depth, session_seq=seq(track_id),
+                            ))
+                        else:
+                            emitter.emit(build_event(
+                                camera_id, visitor_id, "ZONE_ENTER", frame_idx, fps,
+                                clip_start_utc, zone_id=detected_zone,
+                                confidence=conf, is_staff=is_staff, session_seq=seq(track_id),
+                            ))
+                    else:
+                        current_zone.pop(track_id, None)
+
+                # ZONE_DWELL — emit every 30s of continuous presence
+                if detected_zone and (frame_idx - last_dwell_frame.get(track_id, frame_idx)) >= dwell_interval_frames:
+                    dwell_ms = int(((frame_idx - zone_entry_frame.get(track_id, frame_idx)) / fps) * 1000)
+                    emitter.emit(build_event(
+                        camera_id, visitor_id, "ZONE_DWELL", frame_idx, fps,
+                        clip_start_utc, zone_id=detected_zone, dwell_ms=dwell_ms,
+                        confidence=conf, is_staff=is_staff, session_seq=seq(track_id),
+                    ))
+                    last_dwell_frame[track_id] = frame_idx
+
+        # Emit EXIT for tracks that vanished (left frame without crossing line on zone cams)
+        for track_id in list(current_zone.keys()):
+            if track_id not in active_ids:
+                zone_id = current_zone.pop(track_id)
+                visitor_id, _ = reid.get_visitor_id(track_id, (0, 0))
+                dwell_frames  = frame_idx - zone_entry_frame.get(track_id, frame_idx)
+                dwell_ms      = int((dwell_frames / fps) * 1000)
+                emitter.emit(build_event(
+                    camera_id, visitor_id, "ZONE_EXIT", frame_idx, fps,
+                    clip_start_utc, zone_id=zone_id, dwell_ms=dwell_ms,
+                    confidence=YOLO_CONF, session_seq=seq(track_id),
+                ))
+
         frame_idx += 1
 
-        results    = model(frame, classes=[0], conf=YOLO_CONF, verbose=False)[0]
-        detections = sv.Detections.from_ultralytics(results)
-
-        if len(detections) == 0:
-            # Flush lost tracks as exits when no detections in frame
-            for state in tracker.get_lost_tracks(set()):
-                if state.visitor_id not in exited:
-                    _do_exit(state, camera_id, frame_idx, fps, emitter, exited)
-            continue
-
-        # tracker.update returns (tid, state, is_new, conf) — conf from ByteTrack
-        tracked     = tracker.update(detections, frame_idx)
-        active_ids  = {tid for tid, _, _, _ in tracked}
-        lost_tracks = tracker.get_lost_tracks(active_ids)
-
-        for state in lost_tracks:
-            if state.visitor_id not in exited:
-                _do_exit(state, camera_id, frame_idx, fps, emitter, exited)
-
-        for tid, state, is_new, conf in tracked:  # conf unpacked from tracker, not hardcoded
-            bbox   = state.last_bbox
-            cx, cy = centroid(bbox)
-            is_stf = staff_detector.is_staff(frame, bbox)
-
-            # Entry/Exit line crossing — only on CAM_ENTRY_01
-            if entry_cfg is not None:
-                line_y  = float(entry_cfg["y1"])
-                prev_cy = prev_cy_map.get(state.visitor_id, cy)
-                cross   = line_crossed(prev_cy, cy, line_y)
-
-                if cross == "entry" and state.visitor_id not in entered:
-                    ev_type = "REENTRY" if state.is_reentry else "ENTRY"
-                    state.session_seq += 1
-                    emitter.emit(build_event(
-                        camera_id=camera_id, visitor_id=state.visitor_id,
-                        event_type=ev_type, frame_idx=frame_idx, fps=fps,
-                        clip_start_utc=CLIP_START_UTC, is_staff=is_stf,
-                        confidence=conf, session_seq=state.session_seq,
-                    ))
-                    entered.add(state.visitor_id)
-
-                elif cross == "exit" and state.visitor_id not in exited:
-                    _do_exit(state, camera_id, frame_idx, fps, emitter, exited,
-                             is_staff=is_stf, conf=conf)
-
-            # Zone logic — floor and billing cameras
-            _handle_zones(
-                state=state, camera_id=camera_id, cx=cx, cy=cy,
-                frame_idx=frame_idx, fps=fps, zones=zones,
-                is_staff=is_stf, conf=conf, emitter=emitter,
-                dwell_frames=dwell_frames, billing_queue=billing_queue,
-            )
-
-            prev_cy_map[state.visitor_id] = cy
-
-        if frame_idx % 300 == 0:
-            logger.info("  frame %d/%d  events=%d", frame_idx, total_frames, emitter.count())
-
     cap.release()
-
-    # Flush remaining active tracks as exits at video end
-    for state in tracker.get_active().values():
-        if state.visitor_id not in exited:
-            _do_exit(state, camera_id, frame_idx, fps, emitter, exited)
-
-    out = emitter.flush()
-    logger.info("Done camera=%s  events=%d  file=%s", camera_id, emitter.count(), out)
-    return emitter.count()
-
-
-def _do_exit(state, camera_id, frame_idx, fps, emitter, exited_set,
-             is_staff=False, conf=0.85):
-    """Emit EXIT event and mark visitor as exited."""
-    state.session_seq += 1
-    emitter.emit(build_event(
-        camera_id=camera_id, visitor_id=state.visitor_id,
-        event_type="EXIT", frame_idx=frame_idx, fps=fps,
-        clip_start_utc=CLIP_START_UTC, is_staff=is_staff,
-        confidence=conf, session_seq=state.session_seq,
-    ))
-    exited_set.add(state.visitor_id)
-    state.exited     = True
-    state.exit_frame = frame_idx
-
-
-def _handle_zones(state, camera_id, cx, cy, frame_idx, fps, zones,
-                  is_staff, conf, emitter, dwell_frames, billing_queue):
-    """Emit ZONE_ENTER / ZONE_EXIT / ZONE_DWELL / BILLING_QUEUE_JOIN / ABANDON."""
-    current_zone = None
-    current_sku  = None
-    for zone in zones:
-        if point_in_polygon(cx, cy, zone["polygon"]):
-            current_zone = zone["zone_id"]
-            current_sku  = zone.get("sku_zone")
-            break
-
-    prev_zone = state.zone_id
-
-    if current_zone != prev_zone:
-        if prev_zone is not None:
-            dwell_ms = int((frame_idx - (state.zone_enter_frame or frame_idx)) / fps * 1000)
-            state.session_seq += 1
-            emitter.emit(build_event(
-                camera_id=camera_id, visitor_id=state.visitor_id,
-                event_type="ZONE_EXIT", frame_idx=frame_idx, fps=fps,
-                clip_start_utc=CLIP_START_UTC, zone_id=prev_zone,
-                dwell_ms=dwell_ms, is_staff=is_staff, confidence=conf,
-                session_seq=state.session_seq,
-            ))
-            # Leaving billing without a purchase = abandon
-            if prev_zone == "BILLING" and state.visitor_id in billing_queue:
-                state.session_seq += 1
-                emitter.emit(build_event(
-                    camera_id=camera_id, visitor_id=state.visitor_id,
-                    event_type="BILLING_QUEUE_ABANDON", frame_idx=frame_idx, fps=fps,
-                    clip_start_utc=CLIP_START_UTC, zone_id="BILLING",
-                    is_staff=is_staff, confidence=conf,
-                    session_seq=state.session_seq,
-                ))
-                billing_queue.discard(state.visitor_id)
-
-        if current_zone is not None:
-            state.session_seq += 1
-            q_depth = len(billing_queue) if current_zone == "BILLING" else None
-            emitter.emit(build_event(
-                camera_id=camera_id, visitor_id=state.visitor_id,
-                event_type="ZONE_ENTER", frame_idx=frame_idx, fps=fps,
-                clip_start_utc=CLIP_START_UTC, zone_id=current_zone,
-                is_staff=is_staff, confidence=conf, sku_zone=current_sku,
-                queue_depth=q_depth, session_seq=state.session_seq,
-            ))
-            if current_zone == "BILLING" and not is_staff:
-                billing_queue.add(state.visitor_id)
-                state.session_seq += 1
-                emitter.emit(build_event(
-                    camera_id=camera_id, visitor_id=state.visitor_id,
-                    event_type="BILLING_QUEUE_JOIN", frame_idx=frame_idx, fps=fps,
-                    clip_start_utc=CLIP_START_UTC, zone_id="BILLING",
-                    is_staff=is_staff, confidence=conf,
-                    queue_depth=len(billing_queue), session_seq=state.session_seq,
-                ))
-
-        state.zone_id           = current_zone
-        state.zone_enter_frame  = frame_idx
-        state.dwell_emitted_frame = frame_idx
-
-    elif current_zone is not None:
-        since = frame_idx - (state.dwell_emitted_frame or frame_idx)
-        if since >= dwell_frames:
-            dwell_ms = int(since / fps * 1000)
-            state.session_seq += 1
-            emitter.emit(build_event(
-                camera_id=camera_id, visitor_id=state.visitor_id,
-                event_type="ZONE_DWELL", frame_idx=frame_idx, fps=fps,
-                clip_start_utc=CLIP_START_UTC, zone_id=current_zone,
-                dwell_ms=dwell_ms, is_staff=is_staff, confidence=conf,
-                sku_zone=current_sku, session_seq=state.session_seq,
-            ))
-            state.dwell_emitted_frame = frame_idx
+    output_path = emitter.flush()
+    print(f"[{camera_id}] {emitter.count()} events → {output_path}")
+    return output_path
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--camera", required=True)
-    parser.add_argument("--video",  required=True)
+    parser = argparse.ArgumentParser(description="Process one CCTV clip")
+    parser.add_argument("--store",  required=True, help="Store ID: ST1076 or ST1008")
+    parser.add_argument("--camera", required=True, help="Camera ID from store_layout.json")
+    parser.add_argument("--video",  required=True, help="Path to .mp4 file")
+    parser.add_argument(
+        "--clip-start",
+        default=None,
+        help="Clip start datetime UTC in ISO format (default: now)",
+    )
     args = parser.parse_args()
-    process_video(camera_id=args.camera, video_path=args.video)
+
+    os.environ["STORE_ID"] = args.store
+
+    if args.clip_start:
+        clip_start = datetime.fromisoformat(args.clip_start).replace(tzinfo=timezone.utc)
+    else:
+        clip_start = datetime.now(timezone.utc)
+
+    process_clip(args.store, args.camera, args.video, clip_start)

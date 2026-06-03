@@ -9,14 +9,10 @@ logger = logging.getLogger(__name__)
 
 
 async def compute_funnel(store_id: str, db: AsyncSession) -> FunnelResponse:
-    """
-    Compute conversion funnel: Entry → Zone Visit → Billing Queue → Purchase.
-    Session is the unit — re-entries do NOT create a new session for the same visitor_id.
-    Staff excluded throughout.
-    """
+    """4-stage conversion funnel. Session is the unit — re-entries do not double-count."""
     now_utc = datetime.now(timezone.utc).isoformat()
 
-    # Stage 1: Unique visitors who entered (ENTRY events, staff excluded)
+    # Stage 1: unique customer visitors who entered (ENTRY events)
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT visitor_id)
@@ -27,24 +23,24 @@ async def compute_funnel(store_id: str, db: AsyncSession) -> FunnelResponse:
         """),
         {"sid": store_id},
     )
-    total_entered: int = result.scalar() or 0
+    entry_count: int = result.scalar() or 0
 
-    # Stage 2: Unique visitors who visited at least one product zone
+    # Stage 2: visitors who entered at least one named product zone
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT visitor_id)
             FROM events
             WHERE store_id = :sid
-              AND event_type IN ('ZONE_ENTER', 'ZONE_DWELL')
-              AND zone_id NOT IN ('ENTRY_LOBBY', 'STAFF_ROOM')
+              AND event_type = 'ZONE_ENTER'
               AND zone_id IS NOT NULL
+              AND zone_id NOT LIKE '%BILLING%'
               AND is_staff = 0
         """),
         {"sid": store_id},
     )
-    visited_zone: int = result.scalar() or 0
+    zone_count: int = result.scalar() or 0
 
-    # Stage 3: Unique visitors who joined the billing queue
+    # Stage 3: visitors who joined the billing queue
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT visitor_id)
@@ -55,27 +51,25 @@ async def compute_funnel(store_id: str, db: AsyncSession) -> FunnelResponse:
         """),
         {"sid": store_id},
     )
-    reached_billing: int = result.scalar() or 0
+    queue_count: int = result.scalar() or 0
 
-    # Stage 4: Unique visitors who completed a purchase
-    # Visitor was in billing zone within 5 min before a POS transaction
+    # Stage 4: visitors converted via POS correlation (same logic as metrics)
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT e.visitor_id)
             FROM events e
             INNER JOIN pos_transactions p
-                ON p.store_id = e.store_id
-               AND datetime(p.timestamp) >= datetime(e.timestamp)
-               AND datetime(p.timestamp) <= datetime(e.timestamp, '+300 seconds')
+                ON  p.store_id = e.store_id
+                AND datetime(p.timestamp) >= datetime(e.timestamp)
+                AND datetime(p.timestamp) <= datetime(e.timestamp, '+300 seconds')
             WHERE e.store_id = :sid
-              AND e.zone_id = 'BILLING'
+              AND e.zone_id LIKE '%BILLING%'
               AND e.is_staff = 0
         """),
         {"sid": store_id},
     )
-    purchased: int = result.scalar() or 0
+    purchase_count: int = result.scalar() or 0
 
-    # Build stages with drop-off percentages relative to the previous stage
     def drop_off(current: int, previous: int) -> float:
         if previous == 0:
             return 0.0
@@ -83,35 +77,11 @@ async def compute_funnel(store_id: str, db: AsyncSession) -> FunnelResponse:
         return round((lost / previous) * 100, 2)
 
     stages = [
-        FunnelStage(
-            stage="Entry",
-            count=total_entered,
-            drop_off_pct=0.0,                               # baseline stage
-        ),
-        FunnelStage(
-            stage="Zone Visit",
-            count=visited_zone,
-            drop_off_pct=drop_off(visited_zone, total_entered),
-        ),
-        FunnelStage(
-            stage="Billing Queue",
-            count=reached_billing,
-            drop_off_pct=drop_off(reached_billing, visited_zone),
-        ),
-        FunnelStage(
-            stage="Purchase",
-            count=purchased,
-            drop_off_pct=drop_off(purchased, reached_billing),
-        ),
+        FunnelStage(stage="Entry",        count=entry_count,    drop_off_pct=0.0),
+        FunnelStage(stage="Zone Visit",   count=zone_count,     drop_off_pct=drop_off(zone_count,     entry_count)),
+        FunnelStage(stage="Billing Queue",count=queue_count,    drop_off_pct=drop_off(queue_count,    zone_count)),
+        FunnelStage(stage="Purchase",     count=purchase_count, drop_off_pct=drop_off(purchase_count, queue_count)),
     ]
 
-    logger.debug(
-        "Funnel store=%s entry=%d zone=%d billing=%d purchase=%d",
-        store_id, total_entered, visited_zone, reached_billing, purchased,
-    )
-
-    return FunnelResponse(
-        store_id=store_id,
-        stages=stages,
-        computed_at=now_utc,
-    )
+    logger.debug("Funnel store=%s stages=%s", store_id, [s.count for s in stages])
+    return FunnelResponse(store_id=store_id, stages=stages, computed_at=now_utc)

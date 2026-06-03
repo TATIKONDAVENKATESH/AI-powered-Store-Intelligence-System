@@ -1,0 +1,22 @@
+# Never copy large binary files into build context
+data/videos/
+data/generated_events/
+storage/
+
+# Git and editor noise
+.git/
+.gitignore
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+*.egg-info/
+
+# Logs
+*.log
+
+# OS noise
+.DS_Store
+Thumbs.db

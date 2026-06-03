@@ -16,7 +16,6 @@ EventType = Literal[
     "REENTRY",
 ]
 
-# Severity levels for anomalies
 SeverityLevel = Literal["INFO", "WARN", "CRITICAL"]
 
 
@@ -42,14 +41,12 @@ class StoreEvent(BaseModel):
     @field_validator("timestamp")
     @classmethod
     def validate_timestamp(cls, v: str) -> str:
-        # Ensure parseable ISO-8601
         datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
 
     @field_validator("event_id")
     @classmethod
     def validate_uuid(cls, v: str) -> str:
-        # Must be valid UUID
         uuid.UUID(v)
         return v
 
@@ -65,8 +62,6 @@ class IngestResponse(BaseModel):
     errors: List[str] = []
 
 
-# --- Metrics response ---
-
 class ZoneDwell(BaseModel):
     zone_id: str
     avg_dwell_seconds: float
@@ -76,20 +71,18 @@ class ZoneDwell(BaseModel):
 class MetricsResponse(BaseModel):
     store_id: str
     unique_visitors: int
-    conversion_rate: float              # 0.0 to 1.0
+    conversion_rate: float
     avg_dwell_per_zone: List[ZoneDwell]
     queue_depth: int
-    abandonment_rate: float             # 0.0 to 1.0
+    abandonment_rate: float
     total_transactions: int
-    computed_at: str                    # ISO-8601 UTC
+    computed_at: str
 
-
-# --- Funnel response ---
 
 class FunnelStage(BaseModel):
     stage: str
     count: int
-    drop_off_pct: float                 # percentage lost vs previous stage
+    drop_off_pct: float
 
 
 class FunnelResponse(BaseModel):
@@ -98,14 +91,12 @@ class FunnelResponse(BaseModel):
     computed_at: str
 
 
-# --- Heatmap response ---
-
 class HeatmapZone(BaseModel):
     zone_id: str
     sku_zone: Optional[str]
     visit_frequency: int
     avg_dwell_seconds: float
-    normalised_score: float             # 0 to 100
+    normalised_score: float
     data_confidence: bool               # False if < 20 sessions
 
 
@@ -115,14 +106,12 @@ class HeatmapResponse(BaseModel):
     computed_at: str
 
 
-# --- Anomaly response ---
-
 class Anomaly(BaseModel):
     anomaly_type: str
     severity: SeverityLevel
     description: str
     suggested_action: str
-    detected_at: str                    # ISO-8601 UTC
+    detected_at: str
 
 
 class AnomalyResponse(BaseModel):
@@ -130,8 +119,6 @@ class AnomalyResponse(BaseModel):
     anomalies: List[Anomaly]
     computed_at: str
 
-
-# --- Health response ---
 
 class CameraFeedStatus(BaseModel):
     camera_id: str

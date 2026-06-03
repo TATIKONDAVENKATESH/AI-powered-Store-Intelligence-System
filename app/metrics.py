@@ -13,37 +13,36 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
     """Compute real-time store metrics. Excludes is_staff events throughout."""
     now_utc = datetime.now(timezone.utc).isoformat()
 
-    # Unique customer visitors — count distinct visitor_ids from ENTRY events, staff excluded
+    # Unique customer visitors — distinct visitor_ids, staff excluded
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT visitor_id)
             FROM events
-            WHERE store_id = :sid
-              AND is_staff = 0
+            WHERE store_id = :sid AND is_staff = 0
         """),
         {"sid": store_id},
     )
     unique_visitors: int = result.scalar() or 0
 
-    # Total POS transactions for this store
+    # Total POS transactions for this store today
     result = await db.execute(
         text("SELECT COUNT(*) FROM pos_transactions WHERE store_id = :sid"),
         {"sid": store_id},
     )
     total_transactions: int = result.scalar() or 0
 
-    # Conversion rate: visitors who were in billing zone within 5 min before a transaction
-    # A visitor session counts as converted if any of their BILLING events precede a POS tx
+    # Conversion: visitor in any BILLING zone within 5 min before a POS transaction
+    # zone_id LIKE '%BILLING%' covers ST1076_Z_BILLING_01 and ST1008_Z_BILLING_01
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT e.visitor_id)
             FROM events e
             INNER JOIN pos_transactions p
-                ON p.store_id = e.store_id
-               AND datetime(p.timestamp) >= datetime(e.timestamp)
-               AND datetime(p.timestamp) <= datetime(e.timestamp, '+300 seconds')
+                ON  p.store_id = e.store_id
+                AND datetime(p.timestamp) >= datetime(e.timestamp)
+                AND datetime(p.timestamp) <= datetime(e.timestamp, '+300 seconds')
             WHERE e.store_id = :sid
-              AND e.zone_id = 'BILLING'
+              AND e.zone_id LIKE '%BILLING%'
               AND e.is_staff = 0
         """),
         {"sid": store_id},
@@ -54,10 +53,12 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
         round(converted_visitors / unique_visitors, 4) if unique_visitors > 0 else 0.0
     )
 
-    # Average dwell per zone (in seconds), customer events only
+    # Average dwell per zone (seconds), customer events only
     result = await db.execute(
         text("""
-            SELECT zone_id, AVG(dwell_ms) / 1000.0 AS avg_dwell_s, COUNT(*) AS visit_count
+            SELECT zone_id,
+                   AVG(dwell_ms) / 1000.0 AS avg_dwell_s,
+                   COUNT(*) AS visit_count
             FROM events
             WHERE store_id = :sid
               AND event_type IN ('ZONE_DWELL', 'ZONE_ENTER')
@@ -77,8 +78,7 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
         for row in zone_rows
     ]
 
-    # Current queue depth — number of visitors currently in billing zone
-    # Proxy: count visitors with BILLING_QUEUE_JOIN but no subsequent EXIT or BILLING_QUEUE_ABANDON
+    # Current queue depth — visitors with BILLING_QUEUE_JOIN but no EXIT or ABANDON
     result = await db.execute(
         text("""
             SELECT COUNT(DISTINCT visitor_id)
@@ -96,19 +96,19 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
     )
     queue_depth: int = result.scalar() or 0
 
-    # Abandonment rate: visitors who joined billing but abandoned / total who joined
+    # Abandonment rate
     result = await db.execute(
         text("""
             SELECT
-                COUNT(DISTINCT CASE WHEN event_type='BILLING_QUEUE_JOIN' THEN visitor_id END) AS joined,
-                COUNT(DISTINCT CASE WHEN event_type='BILLING_QUEUE_ABANDON' THEN visitor_id END) AS abandoned
+                COUNT(DISTINCT CASE WHEN event_type='BILLING_QUEUE_JOIN'    THEN visitor_id END),
+                COUNT(DISTINCT CASE WHEN event_type='BILLING_QUEUE_ABANDON' THEN visitor_id END)
             FROM events
             WHERE store_id = :sid AND is_staff = 0
         """),
         {"sid": store_id},
     )
     row = result.fetchone()
-    joined = row[0] or 0
+    joined    = row[0] or 0
     abandoned = row[1] or 0
     abandonment_rate = round(abandoned / joined, 4) if joined > 0 else 0.0
 

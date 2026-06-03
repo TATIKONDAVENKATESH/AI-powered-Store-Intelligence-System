@@ -1,104 +1,106 @@
 #!/usr/bin/env bash
-# run.sh — Process all 5 camera videos then ingest events into the API.
+# Run the full detection pipeline for both stores, then ingest into the API.
 # Usage: bash pipeline/run.sh
-# Requires: API running at localhost:8000 (docker compose up or uvicorn)
+# Assumes MP4 files are in data/videos/ with exact filenames as provided.
 
 set -e
 
-VIDEO_DIR="${VIDEO_DIR:-./data/videos}"
-EVENTS_DIR="${EVENTS_DIR:-./data/generated_events}"
-API_URL="${API_URL:-http://localhost:8000}"
-LAYOUT_JSON="${LAYOUT_JSON:-./config/store_layout.json}"
-YOLO_MODEL="${YOLO_MODEL:-yolov8n.pt}"
-YOLO_CONFIDENCE="${YOLO_CONFIDENCE:-0.4}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
+cd "$PROJECT_ROOT"
 
-export LAYOUT_JSON YOLO_MODEL YOLO_CONFIDENCE EVENTS_DIR
-
-echo "=== Store Intelligence — Detection Pipeline ==="
-echo "Video dir : $VIDEO_DIR"
-echo "Events dir: $EVENTS_DIR"
-echo "API       : $API_URL"
-echo ""
-
+export EVENTS_DIR="${EVENTS_DIR:-./data/generated_events}"
+export API_URL="${API_URL:-http://localhost:8000}"
 mkdir -p "$EVENTS_DIR"
 
-# Map camera_id → video filename (from store_layout.json)
-declare -A CAMERA_MAP=(
-    ["CAM_ENTRY_01"]="entry_camera.mp4"
-    ["CAM_FLOOR_A"]="central_a.mp4"
-    ["CAM_FLOOR_B"]="central_b.mp4"
-    ["CAM_BILLING_01"]="billing_camera.mp4"
-    ["CAM_STAFF_01"]="staff_room_camera.mp4"
-)
-
-# Step 1: Run detection on each camera
-for CAM_ID in "${!CAMERA_MAP[@]}"; do
-    VIDEO_FILE="${VIDEO_DIR}/${CAMERA_MAP[$CAM_ID]}"
-    if [ ! -f "$VIDEO_FILE" ]; then
-        echo "[SKIP] $CAM_ID — video not found: $VIDEO_FILE"
-        continue
-    fi
-    echo "[DETECT] $CAM_ID → $VIDEO_FILE"
-    python pipeline/detect.py --camera "$CAM_ID" --video "$VIDEO_FILE"
-    echo "[DONE]   $CAM_ID"
-done
-
+echo "=== Store Intelligence Detection Pipeline ==="
+echo "Project root: $PROJECT_ROOT"
+echo "Events dir:   $EVENTS_DIR"
 echo ""
-echo "=== Detection complete. Merging events... ==="
 
-# Step 2: Merge all per-camera JSONL files into one sorted file
-python - << 'PYEOF'
-import sys, os
-sys.path.insert(0, ".")
+# -----------------------------------------------
+# STORE 1: ST1076  (March 2026 footage)
+# Cameras: CAM3=entry, CAM1=zone, CAM2=zone, CAM6=billing
+# -----------------------------------------------
+echo "--- ST1076: Processing entry camera (CAM3) ---"
+STORE_ID=ST1076 python pipeline/detect.py \
+    --store  ST1076 \
+    --camera CAM3 \
+    --video  "data/videos/CAM 3 - entry.mp4" \
+    --clip-start "2026-03-08T13:00:00"
+
+echo "--- ST1076: Processing zone camera A (CAM1) ---"
+STORE_ID=ST1076 python pipeline/detect.py \
+    --store  ST1076 \
+    --camera CAM1 \
+    --video  "data/videos/CAM 1 - zone.mp4" \
+    --clip-start "2026-03-08T13:00:00"
+
+echo "--- ST1076: Processing zone camera B (CAM2) ---"
+STORE_ID=ST1076 python pipeline/detect.py \
+    --store  ST1076 \
+    --camera CAM2 \
+    --video  "data/videos/CAM 2 - zone.mp4" \
+    --clip-start "2026-03-08T13:00:00"
+
+echo "--- ST1076: Processing billing camera (CAM6) ---"
+STORE_ID=ST1076 python pipeline/detect.py \
+    --store  ST1076 \
+    --camera CAM6 \
+    --video  "data/videos/CAM 5 - billing.mp4" \
+    --clip-start "2026-03-08T13:00:00"
+
+# -----------------------------------------------
+# STORE 2: ST1008  (April 2026 footage)
+# Cameras: CAM_ENTRY_1=entry, CAM_ENTRY_2=entry, CAM_ZONE=zone, CAM_BILLING=billing
+# -----------------------------------------------
+echo "--- ST1008: Processing entry camera 1 ---"
+STORE_ID=ST1008 python pipeline/detect.py \
+    --store  ST1008 \
+    --camera CAM_ENTRY_1 \
+    --video  "data/videos/entry 1.mp4" \
+    --clip-start "2026-04-10T06:30:00"
+
+echo "--- ST1008: Processing entry camera 2 ---"
+STORE_ID=ST1008 python pipeline/detect.py \
+    --store  ST1008 \
+    --camera CAM_ENTRY_2 \
+    --video  "data/videos/entry 2.mp4" \
+    --clip-start "2026-04-10T06:30:00"
+
+echo "--- ST1008: Processing zone camera ---"
+STORE_ID=ST1008 python pipeline/detect.py \
+    --store  ST1008 \
+    --camera CAM_ZONE \
+    --video  "data/videos/zone.mp4" \
+    --clip-start "2026-04-10T06:30:00"
+
+echo "--- ST1008: Processing billing area camera ---"
+STORE_ID=ST1008 python pipeline/detect.py \
+    --store  ST1008 \
+    --camera CAM_BILLING \
+    --video  "data/videos/billing_area.mp4" \
+    --clip-start "2026-04-10T06:30:00"
+
+# -----------------------------------------------
+# Merge all per-camera JSONL files → all_events.jsonl
+# -----------------------------------------------
+echo ""
+echo "--- Merging all event files ---"
+python -c "
 from pipeline.emit import merge_event_files
-out = "./data/generated_events/all_events.jsonl"
-n = merge_event_files(out)
-print(f"Merged {n} events → {out}")
-PYEOF
+count = merge_event_files('./data/generated_events/all_events.jsonl')
+print(f'Merged {count} events → data/generated_events/all_events.jsonl')
+"
 
+# -----------------------------------------------
+# POST events to API in batches of 500
+# -----------------------------------------------
 echo ""
-echo "=== Ingesting events into API at $API_URL ==="
-
-# Step 3: Batch-ingest events into POST /events/ingest (batches of 500)
-python - << 'PYEOF'
-import json, sys, os, math
-import urllib.request, urllib.error
-
-API_URL   = os.getenv("API_URL", "http://localhost:8000")
-JSONL     = "./data/generated_events/all_events.jsonl"
-BATCH     = 500
-
-if not os.path.exists(JSONL):
-    print("No events file found — skipping ingest")
-    sys.exit(0)
-
-with open(JSONL) as f:
-    events = [json.loads(l) for l in f if l.strip()]
-
-print(f"Ingesting {len(events)} events in batches of {BATCH}...")
-
-total_accepted = 0
-for i in range(0, len(events), BATCH):
-    batch = events[i:i+BATCH]
-    body  = json.dumps({"events": batch}).encode()
-    req   = urllib.request.Request(
-        f"{API_URL}/events/ingest",
-        data=body,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
-            result = json.loads(resp.read())
-            total_accepted += result.get("accepted", 0)
-            print(f"  Batch {i//BATCH+1}: accepted={result['accepted']} "
-                  f"rejected={result['rejected']} duplicates={result['duplicates']}")
-    except urllib.error.URLError as e:
-        print(f"  [ERROR] Batch {i//BATCH+1}: {e}")
-
-print(f"\nDone. Total accepted: {total_accepted}")
-PYEOF
+echo "--- Ingesting events into API ---"
+python pipeline/ingest_events.py
 
 echo ""
 echo "=== Pipeline complete ==="
-echo "Check metrics: curl $API_URL/stores/STORE_BLR_002/metrics"
+echo "Dashboard: http://localhost:8501"
+echo "API docs:  http://localhost:8000/docs"

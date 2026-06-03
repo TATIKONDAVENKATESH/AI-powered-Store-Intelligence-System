@@ -1,19 +1,18 @@
-version: "3.9"
-
 services:
 
   api:
     build:
       context: .
       dockerfile: Dockerfile
+    image: store-intelligence:latest       # named so dashboard reuses the same built image
     container_name: store_intelligence_api
     ports:
       - "8000:8000"
     volumes:
-      - ./storage:/app/storage          # SQLite DB persists on host
-      - ./data:/app/data                # videos + POS CSV + generated events
-      - ./config:/app/config            # store_layout.json
-      - ./pipeline:/app/pipeline        # pipeline scripts accessible in container
+      - ./storage:/app/storage             # SQLite DB persists on host
+      - ./data:/app/data                   # videos + POS CSV + generated events (NOT in image)
+      - ./config:/app/config               # store_layout.json
+      - ./pipeline:/app/pipeline           # pipeline scripts (for running detect.py in container)
     env_file:
       - .env
     environment:
@@ -27,6 +26,7 @@ services:
       - LOG_LEVEL=INFO
       - EVENTS_DIR=./data/generated_events
       - STORE_ID=STORE_BLR_002
+      - API_URL=http://localhost:8000       # used by ingest scripts run inside this container
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
     healthcheck:
@@ -35,23 +35,26 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+      start_period: 15s                    # give uvicorn time to start before first check
 
   dashboard:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: store-intelligence:latest       # reuses the image built by api — NO second build
     container_name: store_intelligence_dashboard
     ports:
       - "8501:8501"
     volumes:
-      - ./dashboard:/app/dashboard
+      - ./dashboard:/app/dashboard         # mount only dashboard code
     env_file:
       - .env
     environment:
-      - API_URL=http://api:8000          # service-to-service via docker network, not localhost
+      - API_URL=http://api:8000            # service-name DNS inside Docker network
       - STORE_ID=STORE_BLR_002
     depends_on:
       api:
         condition: service_healthy
-    command: streamlit run dashboard/streamlit_app.py --server.port 8501 --server.address 0.0.0.0 --server.headless true
+    command: >
+      streamlit run dashboard/streamlit_app.py
+      --server.port 8501
+      --server.address 0.0.0.0
+      --server.headless true
     restart: unless-stopped

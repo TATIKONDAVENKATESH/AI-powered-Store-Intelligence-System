@@ -1,179 +1,140 @@
 from __future__ import annotations
-import numpy as np
+import json
+import os
+import time
+from collections import defaultdict
 from typing import Optional
-import supervision as sv
+import numpy as np
+
+# Load store layout once for HSV staff params
+_LAYOUT_PATH = os.getenv("LAYOUT_JSON", "./config/store_layout.json")
+with open(_LAYOUT_PATH) as f:
+    _LAYOUT = json.load(f)
 
 
-REENTRY_WINDOW_SECONDS = 300
+def _get_staff_hsv(store_id: str) -> tuple[list, list]:
+    """Return HSV lower/upper bounds for staff uniform detection."""
+    store = _LAYOUT["stores"].get(store_id, {})
+    hsv = store.get("staff_uniform_hsv", {"lower": [0, 0, 0], "upper": [180, 60, 80]})
+    return hsv["lower"], hsv["upper"]
 
 
-class TrackState:
-    """Per-track bookkeeping within one camera feed."""
+class StaffDetector:
+    """Detects staff by uniform colour in the billing area frame."""
 
-    def __init__(self, track_id: int, visitor_id: str, first_frame: int):
-        self.track_id = track_id
-        self.visitor_id = visitor_id
-        self.first_frame = first_frame
-        self.last_frame = first_frame
-        self.last_bbox: Optional[np.ndarray] = None
-        self.zone_id: Optional[str] = None
-        self.zone_enter_frame: Optional[int] = None
-        self.dwell_emitted_frame: int = 0
-        self.session_seq: int = 0
-        self.exited: bool = False
-        self.exit_frame: Optional[int] = None
-        self.is_reentry: bool = False
+    def __init__(self, store_id: str):
+        self.lower, self.upper = _get_staff_hsv(store_id)
+        self._lower_np = np.array(self.lower, dtype=np.uint8)
+        self._upper_np = np.array(self.upper, dtype=np.uint8)
+
+    def is_staff(self, frame: np.ndarray, bbox: tuple[int, int, int, int]) -> bool:
+        """Check if the dominant colour of a bounding box matches staff uniform."""
+        import cv2
+        x1, y1, x2, y2 = bbox
+        # Clamp to frame bounds
+        x1, y1 = max(0, x1), max(0, y1)
+        x2, y2 = min(frame.shape[1], x2), min(frame.shape[0], y2)
+        if x2 <= x1 or y2 <= y1:
+            return False
+        crop = frame[y1:y2, x1:x2]
+        hsv  = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
+        mask = cv2.inRange(hsv, self._lower_np, self._upper_np)
+        # Staff if > 25% of crop pixels match uniform colour
+        ratio = np.count_nonzero(mask) / (mask.size or 1)
+        return ratio > 0.25
+
+
+class ReIDTracker:
+    """
+    Simple centroid-based Re-ID.
+    Maps numeric track_id → visitor_id string. Re-uses visitor_id if the centroid
+    re-appears within REENTRY_WINDOW_SECONDS after an EXIT.
+    """
+
+    REENTRY_WINDOW_S = 300   # 5-minute window for re-entry detection
+    REENTRY_DIST_PX  = 200   # max centroid distance to consider same person
+
+    def __init__(self):
+        self._track_to_visitor: dict[int, str]   = {}
+        self._exited: list[dict]                  = []  # {visitor_id, centroid, exited_at}
+        self._visitor_seq: dict[str, int]         = defaultdict(int)
+
+    def get_visitor_id(
+        self, track_id: int, centroid: tuple[float, float]
+    ) -> tuple[str, bool]:
+        """
+        Return (visitor_id, is_reentry).
+        Assigns a new visitor_id on first sight, or re-uses one from exited list.
+        """
+        if track_id in self._track_to_visitor:
+            return self._track_to_visitor[track_id], False
+
+        # Check exited visitors for Re-ID
+        now = time.time()
+        for record in self._exited:
+            if now - record["exited_at"] > self.REENTRY_WINDOW_S:
+                continue
+            cx, cy = record["centroid"]
+            dist   = ((centroid[0] - cx) ** 2 + (centroid[1] - cy) ** 2) ** 0.5
+            if dist < self.REENTRY_DIST_PX:
+                visitor_id = record["visitor_id"]
+                self._track_to_visitor[track_id] = visitor_id
+                return visitor_id, True  # re-entry detected
+
+        # New visitor
+        visitor_id = f"VIS_{track_id:04d}"
+        self._track_to_visitor[track_id] = visitor_id
+        return visitor_id, False
+
+    def mark_exit(self, track_id: int, centroid: tuple[float, float]) -> None:
+        """Record exit so we can detect re-entry."""
+        visitor_id = self._track_to_visitor.get(track_id)
+        if visitor_id:
+            self._exited.append({
+                "visitor_id": visitor_id,
+                "centroid":   centroid,
+                "exited_at":  time.time(),
+            })
+            # Remove stale records to save memory
+            cutoff = time.time() - self.REENTRY_WINDOW_S
+            self._exited = [r for r in self._exited if r["exited_at"] > cutoff]
+
+    def next_session_seq(self, visitor_id: str) -> int:
+        """Increment and return the event sequence number for a visitor session."""
+        self._visitor_seq[visitor_id] += 1
+        return self._visitor_seq[visitor_id]
 
 
 class CameraTracker:
     """
-    Wraps supervision ByteTrack and manages visitor_id assignment.
-    Returns confidence from ByteTrack alongside each track state.
+    Wraps supervision ByteTrack + ReIDTracker for a single camera.
+    Stores per-track state: current zone, zone entry time, dwell accumulators.
     """
 
-    def __init__(self, camera_id: str, fps: float, frame_rate: int = 15):
+    def __init__(self, store_id: str, camera_id: str, fps: float = 15.0):
+        import supervision as sv
+        self.store_id  = store_id
         self.camera_id = camera_id
-        self.fps = fps
-        self.byte_tracker = sv.ByteTrack(
-            track_activation_threshold=0.4,
-            lost_track_buffer=int(fps * 3),
-            minimum_matching_threshold=0.8,
-            frame_rate=frame_rate,
-        )
-        self._tracks: dict[int, TrackState] = {}
-        self._exited: dict[str, TrackState] = {}
-        self._visitor_counter: int = 0
+        self.fps       = fps
+        self.tracker   = sv.ByteTrack(lost_track_buffer=int(fps * 3))  # 3s buffer
+        self.reid      = ReIDTracker()
+        self.staff_det = StaffDetector(store_id)
 
-    def _new_visitor_id(self) -> str:
-        self._visitor_counter += 1
-        return f"VIS_{self.camera_id}_{self._visitor_counter:04d}"
-
-    def _find_reentry(self, bbox: np.ndarray, current_frame: int) -> Optional[str]:
-        """Lightweight Re-ID: centroid proximity within reentry window."""
-        cx = (bbox[0] + bbox[2]) / 2
-        cy = (bbox[1] + bbox[3]) / 2
-        reentry_frames = REENTRY_WINDOW_SECONDS * self.fps
-
-        best_vid = None
-        best_dist = float("inf")
-
-        for vid, state in self._exited.items():
-            if state.exit_frame is None:
-                continue
-            if (current_frame - state.exit_frame) > reentry_frames:
-                continue
-            if state.last_bbox is None:
-                continue
-            ex = (state.last_bbox[0] + state.last_bbox[2]) / 2
-            ey = (state.last_bbox[1] + state.last_bbox[3]) / 2
-            dist = np.sqrt((cx - ex) ** 2 + (cy - ey) ** 2)
-            if dist < best_dist:
-                best_dist = dist
-                best_vid = vid
-
-        if best_vid is not None and best_dist < 200:
-            return best_vid
-        return None
+        # Per-track state
+        self._zone_entry_frame: dict[int, int]  = {}   # track_id → frame when entered zone
+        self._current_zone: dict[int, str]       = {}   # track_id → zone_id
+        self._last_dwell_frame: dict[int, int]   = {}   # track_id → last ZONE_DWELL emit frame
+        self._crossed_entry: set[int]            = set()  # tracks that crossed entry line
 
     def update(
-        self, detections: sv.Detections, frame_idx: int
-    ) -> list[tuple[int, TrackState, bool, float]]:
+        self, detections, frame_idx: int, frame: np.ndarray
+    ):
         """
-        Feed detections into ByteTrack.
-        Returns list of (track_id, TrackState, is_new, confidence).
-        Confidence comes from ByteTrack — not hardcoded.
+        Feed YOLO detections into ByteTrack. Returns supervision Detections with track_ids.
         """
-        tracked = self.byte_tracker.update_with_detections(detections)
-        if (
-                tracked.tracker_id is None
-                or len(tracked.tracker_id) == 0
-        ):
-            return []
-        results = []
+        return self.tracker.update_with_detections(detections)
 
-        valid_count = min(
-            len(tracked.xyxy),
-            len(tracked.tracker_id)
-        )
-
-        for i in range(valid_count):
-            tid = int(tracked.tracker_id[i])
-            bbox = tracked.xyxy[i]
-            # Extract real confidence from tracked detections
-            conf = float(tracked.confidence[i]) if tracked.confidence is not None else 0.85
-
-            is_new = tid not in self._tracks
-
-            if is_new:
-                reentry_vid = self._find_reentry(bbox, frame_idx)
-                if reentry_vid is not None:
-                    vid = reentry_vid
-                    self._exited.pop(reentry_vid, None)
-                    is_reentry = True
-                else:
-                    vid = self._new_visitor_id()
-                    is_reentry = False
-
-                state = TrackState(
-                    track_id=tid,
-                    visitor_id=vid,
-                    first_frame=frame_idx,
-                )
-                state.is_reentry = is_reentry
-                self._tracks[tid] = state
-
-            state = self._tracks[tid]
-            state.last_frame = frame_idx
-            state.last_bbox = bbox
-            results.append((tid, state, is_new, conf))  # conf included, not hardcoded
-
-        return results
-
-    def get_lost_tracks(self, active_track_ids: set[int]) -> list[TrackState]:
-        """Return tracks no longer active; move them to exited pool."""
-        lost = []
-        for tid, state in list(self._tracks.items()):
-            if tid not in active_track_ids:
-                lost.append(state)
-                state.exit_frame = state.last_frame
-                self._exited[state.visitor_id] = state
-                del self._tracks[tid]
-        return lost
-
-    def get_active(self) -> dict[int, TrackState]:
-        return self._tracks
-
-
-class StaffDetector:
-    """
-    Classify staff by HSV uniform colour (dark navy/black) in upper-body crop.
-    CAM_STAFF_01: all detections are always staff.
-    CAM_BILLING_01: HSV check on upper-body region.
-    All other cameras: never staff (customers only on floor cameras).
-    """
-
-    HSV_LOWER = np.array([100, 50, 20], dtype=np.uint8)
-    HSV_UPPER = np.array([130, 255, 80], dtype=np.uint8)
-    MIN_UNIFORM_RATIO = 0.35
-
-    def __init__(self, camera_id: str):
-        self.camera_id = camera_id
-        self.always_staff = camera_id == "CAM_STAFF_01"
-
-    def is_staff(self, frame: np.ndarray, bbox: np.ndarray) -> bool:
-        if self.always_staff:
-            return True
-        if self.camera_id != "CAM_BILLING_01":
-            return False
-
-        import cv2
-        x1, y1, x2, y2 = int(bbox[0]), int(bbox[1]), int(bbox[2]), int(bbox[3])
-        mid_y = y1 + (y2 - y1) // 2
-        crop = frame[y1:mid_y, x1:x2]
-        if crop.size == 0:
-            return False
-
-        hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        mask = cv2.inRange(hsv, self.HSV_LOWER, self.HSV_UPPER)
-        ratio = np.count_nonzero(mask) / mask.size
-        return ratio >= self.MIN_UNIFORM_RATIO
+    def centroid(self, bbox) -> tuple[float, float]:
+        """Compute centroid from xyxy bounding box."""
+        x1, y1, x2, y2 = bbox
+        return ((x1 + x2) / 2, (y1 + y2) / 2)

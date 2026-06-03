@@ -1,134 +1,89 @@
-"""
-streamlit_app.py — Store Intelligence Live Dashboard
-Run: streamlit run dashboard/streamlit_app.py
-"""
-from __future__ import annotations
+"""Live store intelligence dashboard. Polls all API endpoints every 5 seconds."""
 import time
 import os
 import requests
 import streamlit as st
-import pandas as pd
 
-API_BASE  = os.getenv("API_URL", "http://localhost:8000")
-STORE_ID  = os.getenv("STORE_ID", "STORE_BLR_002")
-REFRESH_S = 5   # auto-refresh interval in seconds
+API_URL     = os.getenv("API_URL", "http://localhost:8000")
+STORE_IDS   = ["ST1076", "ST1008"]
+REFRESH_S   = 5
 
-st.set_page_config(
-    page_title="Store Intelligence",
-    page_icon="🛍️",
-    layout="wide",
-)
+st.set_page_config(page_title="Store Intelligence", layout="wide")
+st.title("📊 Store Intelligence — Live Dashboard")
 
 
-def fetch(path: str) -> dict | None:
-    """GET from API, return JSON or None on error."""
+def fetch(endpoint: str) -> dict | None:
     try:
-        r = requests.get(f"{API_BASE}{path}", timeout=5)
+        r = requests.get(f"{API_URL}{endpoint}", timeout=5)
         r.raise_for_status()
         return r.json()
-    except Exception as exc:
-        st.error(f"API error ({path}): {exc}")
+    except Exception as e:
         return None
 
 
-# --- Header ---
-st.title("🛍️ Store Intelligence Dashboard")
-st.caption(f"Store: **{STORE_ID}** · API: {API_BASE} · Auto-refresh every {REFRESH_S}s")
+placeholder = st.empty()
 
-# --- Health badge ---
-health = fetch("/health")
-if health:
-    colour = {"ok": "🟢", "degraded": "🟡", "down": "🔴"}.get(health["status"], "⚪")
-    st.markdown(f"{colour} System status: **{health['status'].upper()}** &nbsp;|&nbsp; "
-                f"DB connected: `{health['db_connected']}` &nbsp;|&nbsp; "
-                f"Last event: `{health.get('last_event_at', 'N/A')}`")
+while True:
+    with placeholder.container():
+        # Health row
+        health = fetch("/health")
+        if health:
+            db_ok = health.get("db_connected", False)
+            stale = health.get("stale_feed", False)
+            status = health.get("status", "unknown")
+            color  = "🟢" if status == "ok" else ("🟡" if status == "degraded" else "🔴")
+            st.markdown(f"**System Status:** {color} `{status}` | DB: {'✅' if db_ok else '❌'} | Stale feeds: {'⚠️' if stale else '✅'}")
+        else:
+            st.error("API unreachable — is `docker compose up` running?")
 
-st.divider()
+        for store_id in STORE_IDS:
+            st.markdown(f"---\n## 🏪 Store: `{store_id}`")
+            col1, col2, col3, col4 = st.columns(4)
 
-# --- Row 1: Key Metrics ---
-metrics = fetch(f"/stores/{STORE_ID}/metrics")
-if metrics:
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Unique Visitors",    metrics["unique_visitors"])
-    c2.metric("Conversion Rate",    f"{metrics['conversion_rate']:.1%}")
-    c3.metric("Transactions",       metrics["total_transactions"])
-    c4.metric("Queue Depth",        metrics["queue_depth"])
-    c5.metric("Abandonment Rate",   f"{metrics['abandonment_rate']:.1%}")
+            # Metrics
+            m = fetch(f"/stores/{store_id}/metrics")
+            if m:
+                col1.metric("Unique Visitors",    m.get("unique_visitors", 0))
+                col2.metric("Conversion Rate",    f"{m.get('conversion_rate', 0):.1%}")
+                col3.metric("Queue Depth",        m.get("queue_depth", 0))
+                col4.metric("Abandonment Rate",   f"{m.get('abandonment_rate', 0):.1%}")
+            else:
+                col1.warning("Metrics unavailable")
 
-st.divider()
+            # Funnel
+            funnel = fetch(f"/stores/{store_id}/funnel")
+            if funnel and funnel.get("stages"):
+                st.markdown("**Conversion Funnel**")
+                fcols = st.columns(len(funnel["stages"]))
+                for i, stage in enumerate(funnel["stages"]):
+                    fcols[i].metric(
+                        stage["stage"],
+                        stage["count"],
+                        delta=f"-{stage['drop_off_pct']:.1f}%" if stage["drop_off_pct"] > 0 else None,
+                        delta_color="inverse",
+                    )
 
-# --- Row 2: Funnel + Heatmap ---
-col_funnel, col_heat = st.columns(2)
+            # Heatmap
+            heatmap = fetch(f"/stores/{store_id}/heatmap")
+            if heatmap and heatmap.get("zones"):
+                st.markdown("**Zone Heatmap** (visit frequency, normalised 0–100)")
+                hcols = st.columns(min(len(heatmap["zones"]), 4))
+                for i, zone in enumerate(heatmap["zones"][:4]):
+                    hcols[i % 4].metric(
+                        zone["zone_id"],
+                        f"{zone['normalised_score']:.0f}",
+                        help=f"Visits: {zone['visit_frequency']} | Avg dwell: {zone['avg_dwell_seconds']:.0f}s | Confidence: {'✅' if zone['data_confidence'] else '⚠️'}",
+                    )
 
-with col_funnel:
-    st.subheader("Conversion Funnel")
-    funnel = fetch(f"/stores/{STORE_ID}/funnel")
-    if funnel and funnel.get("stages"):
-        df = pd.DataFrame(funnel["stages"])
-        st.bar_chart(df.set_index("stage")["count"])
-        st.dataframe(
-            df[["stage", "count", "drop_off_pct"]].rename(
-                columns={"drop_off_pct": "drop_off %"}
-            ),
-            use_container_width=True,
-            hide_index=True,
-        )
+            # Anomalies
+            anom = fetch(f"/stores/{store_id}/anomalies")
+            if anom and anom.get("anomalies"):
+                st.markdown("**⚠️ Active Anomalies**")
+                for a in anom["anomalies"]:
+                    sev    = a["severity"]
+                    colour = "🔴" if sev == "CRITICAL" else ("🟡" if sev == "WARN" else "🔵")
+                    st.warning(f"{colour} **{a['anomaly_type']}** ({sev}): {a['description']}  \n_Action: {a['suggested_action']}_")
 
-with col_heat:
-    st.subheader("Zone Heatmap (Dwell & Visits)")
-    heatmap = fetch(f"/stores/{STORE_ID}/heatmap")
-    if heatmap and heatmap.get("zones"):
-        df = pd.DataFrame(heatmap["zones"])
-        st.dataframe(
-            df[["zone_id", "visit_frequency", "avg_dwell_seconds", "normalised_score", "data_confidence"]]
-            .sort_values("normalised_score", ascending=False)
-            .rename(columns={
-                "zone_id": "Zone",
-                "visit_frequency": "Visits",
-                "avg_dwell_seconds": "Avg Dwell (s)",
-                "normalised_score": "Score (0-100)",
-                "data_confidence": "Confident",
-            }),
-            use_container_width=True,
-            hide_index=True,
-        )
-    elif heatmap:
-        st.info("No zone data yet.")
+        st.caption(f"Last refreshed: {time.strftime('%H:%M:%S')}")
 
-st.divider()
-
-# --- Row 3: Anomalies ---
-st.subheader("⚠️ Active Anomalies")
-anomalies = fetch(f"/stores/{STORE_ID}/anomalies")
-if anomalies:
-    items = anomalies.get("anomalies", [])
-    if not items:
-        st.success("No active anomalies.")
-    else:
-        for a in items:
-            colour_map = {"CRITICAL": "🔴", "WARN": "🟡", "INFO": "🔵"}
-            icon = colour_map.get(a["severity"], "⚪")
-            with st.expander(f"{icon} {a['anomaly_type']} — {a['severity']}"):
-                st.write(f"**Description:** {a['description']}")
-                st.write(f"**Suggested action:** {a['suggested_action']}")
-                st.caption(f"Detected at: {a['detected_at']}")
-
-st.divider()
-
-# --- Row 4: Camera Feed Status ---
-if health and health.get("store_feeds"):
-    st.subheader("📷 Camera Feed Status")
-    df = pd.DataFrame(health["store_feeds"])
-    df["status"] = df["stale"].map({True: "🟡 Stale", False: "🟢 Live"})
-    st.dataframe(
-        df[["camera_id", "status", "last_event_at"]].rename(
-            columns={"camera_id": "Camera", "last_event_at": "Last Event"}
-        ),
-        use_container_width=True,
-        hide_index=True,
-    )
-
-# --- Auto-refresh ---
-st.caption(f"_Last refreshed: {time.strftime('%H:%M:%S')}_")
-if st.button("🔄 Refresh Dashboard"):
-    st.rerun()
+    time.sleep(REFRESH_S)

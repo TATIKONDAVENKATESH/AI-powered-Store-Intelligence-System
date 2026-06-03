@@ -1,116 +1,155 @@
 {
-  "store_id": "STORE_BLR_002",
-  "store_name": "Brigade_Bangalore",
-  "pos_store_id": "ST1008",
-  "timezone": "Asia/Kolkata",
-  "open_hours": { "start": "10:00", "end": "22:00" },
-  "frame_width": 1920,
-  "frame_height": 1080,
-
-  "cameras": [
-    {
-      "camera_id": "CAM_ENTRY_01",
-      "file": "entry_camera.mp4",
-      "role": "entry_exit",
-      "description": "Captures the main entry/exit threshold"
+  "stores": {
+    "ST1076": {
+      "store_code": "store_1076",
+      "name": "Purplle Store Mumbai 1076",
+      "open_hours": {"open": "10:00", "close": "22:00"},
+      "staff_uniform_hsv": {
+        "lower": [160, 100, 100],
+        "upper": [175, 255, 255],
+        "name": "pink_magenta"
+      },
+      "cameras": {
+        "CAM3": {
+          "role": "entry",
+          "video_file": "CAM 3 - entry.mp4",
+          "entry_line_y": 540,
+          "resolution": [1280, 960]
+        },
+        "CAM1": {
+          "role": "zone",
+          "video_file": "CAM 1 - zone.mp4",
+          "resolution": [1280, 960]
+        },
+        "CAM2": {
+          "role": "zone",
+          "video_file": "CAM 2 - zone.mp4",
+          "resolution": [1280, 960]
+        },
+        "CAM6": {
+          "role": "billing",
+          "video_file": "CAM 5 - billing.mp4",
+          "resolution": [1280, 960]
+        }
+      },
+      "zones": {
+        "CAM1": [
+          {
+            "zone_id": "ST1076_Z01",
+            "zone_name": "Left Shelf",
+            "zone_type": "SHELF",
+            "is_revenue_zone": true,
+            "polygon": [[50, 100], [600, 100], [600, 700], [50, 700]],
+            "brands": ["Salm", "TFS", "Minimalist"]
+          },
+          {
+            "zone_id": "ST1076_Z02",
+            "zone_name": "Center Display",
+            "zone_type": "DISPLAY",
+            "is_revenue_zone": true,
+            "polygon": [[600, 100], [1100, 100], [1100, 700], [600, 700]],
+            "brands": ["Aqualogica", "Foxtale", "JC"]
+          }
+        ],
+        "CAM2": [
+          {
+            "zone_id": "ST1076_Z03",
+            "zone_name": "Fragrance Counter",
+            "zone_type": "SHELF",
+            "is_revenue_zone": true,
+            "polygon": [[50, 150], [550, 150], [550, 750], [50, 750]],
+            "brands": ["Fragrance", "Nail Unit"]
+          },
+          {
+            "zone_id": "ST1076_Z04",
+            "zone_name": "Bottom Wall Shelf",
+            "zone_type": "SHELF",
+            "is_revenue_zone": true,
+            "polygon": [[550, 400], [1200, 400], [1200, 900], [550, 900]],
+            "brands": ["Faces Canada", "Mars+Nybae", "Mens", "Loreal", "Beauty"]
+          }
+        ],
+        "CAM6": [
+          {
+            "zone_id": "ST1076_Z_BILLING_01",
+            "zone_name": "Billing Counter Queue",
+            "zone_type": "BILLING",
+            "is_revenue_zone": true,
+            "polygon": [[200, 300], [900, 300], [900, 960], [200, 960]]
+          }
+        ]
+      }
     },
-    {
-      "camera_id": "CAM_FLOOR_A",
-      "file": "central_a.mp4",
-      "role": "floor",
-      "description": "Main floor zone A — top-wall brand shelves"
-    },
-    {
-      "camera_id": "CAM_FLOOR_B",
-      "file": "central_b.mp4",
-      "role": "floor",
-      "description": "Main floor zone B — bottom-wall brands and makeup island"
-    },
-    {
-      "camera_id": "CAM_BILLING_01",
-      "file": "billing_camera.mp4",
-      "role": "billing",
-      "description": "Billing counter area and queue"
-    },
-    {
-      "camera_id": "CAM_STAFF_01",
-      "file": "staff_room_camera.mp4",
-      "role": "staff",
-      "description": "Staff room — detections here are always staff"
+    "ST1008": {
+      "store_code": "store_1008",
+      "name": "Purplle Store 1008",
+      "open_hours": {"open": "10:00", "close": "22:00"},
+      "staff_uniform_hsv": {
+        "lower": [0, 0, 0],
+        "upper": [180, 60, 80],
+        "name": "black"
+      },
+      "cameras": {
+        "CAM_ENTRY_1": {
+          "role": "entry",
+          "video_file": "entry 1.mp4",
+          "entry_line_y": 540,
+          "resolution": [1280, 960]
+        },
+        "CAM_ENTRY_2": {
+          "role": "entry",
+          "video_file": "entry 2.mp4",
+          "entry_line_y": 540,
+          "resolution": [1280, 960]
+        },
+        "CAM_ZONE": {
+          "role": "zone",
+          "video_file": "zone.mp4",
+          "resolution": [1920, 1080]
+        },
+        "CAM_BILLING": {
+          "role": "billing",
+          "video_file": "billing_area.mp4",
+          "resolution": [1920, 1080]
+        }
+      },
+      "zones": {
+        "CAM_ZONE": [
+          {
+            "zone_id": "ST1008_Z01",
+            "zone_name": "Left Wall Units",
+            "zone_type": "SHELF",
+            "is_revenue_zone": true,
+            "polygon": [[0, 0], [480, 0], [480, 1080], [0, 1080]],
+            "brands": ["Alps", "6Mars", "Swiss Beauty"]
+          },
+          {
+            "zone_id": "ST1008_Z02",
+            "zone_name": "Center Gondola",
+            "zone_type": "DISPLAY",
+            "is_revenue_zone": true,
+            "polygon": [[480, 200], [1100, 200], [1100, 900], [480, 900]],
+            "brands": ["TFS", "Good Vibes", "Derma Co", "Minimalist", "Aqualogica"]
+          },
+          {
+            "zone_id": "ST1008_Z03",
+            "zone_name": "Right Wall Units",
+            "zone_type": "SHELF",
+            "is_revenue_zone": true,
+            "polygon": [[1100, 0], [1920, 0], [1920, 1080], [1100, 1080]],
+            "brands": ["Lakme", "Faces Canada", "Maybelline"]
+          }
+        ],
+        "CAM_BILLING": [
+          {
+            "zone_id": "ST1008_Z_BILLING_01",
+            "zone_name": "Billing Counter Queue",
+            "zone_type": "BILLING",
+            "is_revenue_zone": true,
+            "polygon": [[200, 200], [1700, 200], [1700, 1080], [200, 1080]]
+          }
+        ]
+      }
     }
-  ],
-
-  "entry_line": {
-    "camera_id": "CAM_ENTRY_01",
-    "x1": 200, "y1": 540,
-    "x2": 1720, "y2": 540,
-    "description": "Horizontal line across entry threshold at mid-frame"
-  },
-
-  "zones": [
-    {
-      "zone_id": "ENTRY_LOBBY",
-      "sku_zone": "ENTRY",
-      "camera_id": "CAM_ENTRY_01",
-      "polygon": [[0, 0], [1920, 0], [1920, 1080], [0, 1080]],
-      "description": "Full entry camera frame — used for ENTRY/EXIT events only"
-    },
-    {
-      "zone_id": "SKINCARE_TOP",
-      "sku_zone": "SKINCARE",
-      "camera_id": "CAM_FLOOR_A",
-      "polygon": [[0, 0], [1920, 0], [1920, 400], [0, 400]],
-      "description": "Top wall — Salm, TFS, GV, DermDoc, Minimalist, Aqualogica, Foxtale, JC"
-    },
-    {
-      "zone_id": "MAKEUP_CENTER",
-      "sku_zone": "MAKEUP",
-      "camera_id": "CAM_FLOOR_B",
-      "polygon": [[640, 200], [1280, 200], [1280, 800], [640, 800]],
-      "description": "Center makeup island unit"
-    },
-    {
-      "zone_id": "FRAGRANCE_NAIL",
-      "sku_zone": "FRAGRANCE",
-      "camera_id": "CAM_FLOOR_B",
-      "polygon": [[0, 200], [500, 200], [500, 900], [0, 900]],
-      "description": "Left-center — Fragrance and Nail Counter island"
-    },
-    {
-      "zone_id": "SKINCARE_BOTTOM",
-      "sku_zone": "SKINCARE",
-      "camera_id": "CAM_FLOOR_B",
-      "polygon": [[0, 700], [1920, 700], [1920, 1080], [0, 1080]],
-      "description": "Bottom wall — Maybelline, Faces, Lakme, Mars+Nybae, Mens Care, Alps, Loreal, Beauty Essential"
-    },
-    {
-      "zone_id": "BILLING",
-      "sku_zone": "BILLING",
-      "camera_id": "CAM_BILLING_01",
-      "polygon": [[0, 0], [1920, 0], [1920, 1080], [0, 1080]],
-      "description": "Cash counter and billing queue area"
-    },
-    {
-      "zone_id": "STAFF_ROOM",
-      "sku_zone": "STAFF",
-      "camera_id": "CAM_STAFF_01",
-      "polygon": [[0, 0], [1920, 0], [1920, 1080], [0, 1080]],
-      "description": "Staff-only area — all detections here are staff"
-    }
-  ],
-
-  "staff_detection": {
-    "method": "hsv_uniform_color",
-    "description": "Detect staff by dark navy/black uniform in upper-body region",
-    "hsv_lower": [100, 50, 20],
-    "hsv_upper": [130, 255, 80],
-    "min_uniform_ratio": 0.35,
-    "billing_zone_id": "BILLING",
-    "staff_camera_id": "CAM_STAFF_01"
-  },
-
-  "reentry_window_seconds": 300,
-  "dwell_emit_interval_seconds": 30,
-  "billing_queue_min_depth": 1,
-  "pos_correlation_window_seconds": 300
+  }
 }

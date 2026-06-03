@@ -1,13 +1,19 @@
 from __future__ import annotations
+import csv
 import logging
 from collections import defaultdict
 from datetime import datetime, timezone
 from typing import List
+from zoneinfo import ZoneInfo
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models import StoreEvent, IngestResponse
 
 logger = logging.getLogger(__name__)
+
+# IST timezone for POS CSV date/time conversion
+_IST = ZoneInfo("Asia/Kolkata")
 
 
 async def ingest_events(
@@ -31,7 +37,6 @@ async def ingest_events(
                 duplicates += 1
                 continue
 
-            # Column names match schema.sql exactly
             await db.execute(
                 text("""
                     INSERT INTO events (
@@ -86,51 +91,58 @@ async def ingest_events(
 async def load_pos_transactions(csv_path: str, db: AsyncSession) -> int:
     """
     Load POS CSV into pos_transactions table.
-    Groups by invoice_number (unique per transaction) and sums total_amount per invoice.
-    Idempotent — skips rows already present.
+    Groups product-level rows by order_id — each unique order_id is one transaction.
+    POS CSV columns: order_id, order_date, order_time, store_id, product_id, brand_name, total_amount
+    Dates are DD-MM-YYYY IST, converted to UTC ISO-8601.
+    Idempotent — skips order_ids already in DB.
     """
-    import csv
-    from zoneinfo import ZoneInfo
+    # Aggregate product-level rows into one record per order_id
+    orders: dict[str, dict] = defaultdict(
+        lambda: {"total": 0.0, "date": "", "time": "", "store_id": ""}
+    )
 
-    ist = ZoneInfo("Asia/Kolkata")
-
-    # Group line-item rows by invoice_number to get one record per transaction
-    invoices: dict[str, dict] = defaultdict(lambda: {"total": 0.0, "date": "", "time": "", "store": ""})
-
-    with open(csv_path, newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            inv = row.get("invoice_number", "").strip()
-            if not inv:
-                continue
-            invoices[inv]["date"]  = row.get("order_date", "")
-            invoices[inv]["time"]  = row.get("order_time", "")
-            invoices[inv]["store"] = row.get("store_id", "")
-            try:
-                invoices[inv]["total"] += float(row.get("total_amount", 0) or 0)
-            except ValueError:
-                pass
+    try:
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                order_id = row.get("order_id", "").strip()
+                if not order_id:
+                    continue
+                # Last row for this order_id sets the date/time/store (all rows identical)
+                orders[order_id]["date"]     = row.get("order_date", "").strip()
+                orders[order_id]["time"]     = row.get("order_time", "").strip()
+                orders[order_id]["store_id"] = row.get("store_id", "").strip()
+                try:
+                    orders[order_id]["total"] += float(row.get("total_amount", 0) or 0)
+                except ValueError:
+                    pass
+    except FileNotFoundError:
+        logger.warning("POS CSV not found at %s — skipping", csv_path)
+        return 0
 
     loaded = 0
-    for inv, data in invoices.items():
+    for order_id, data in orders.items():
         try:
             dt_str = f"{data['date']} {data['time']}"
+            # Parse DD-MM-YYYY HH:MM:SS (actual CSV format)
             for fmt in ("%d-%m-%Y %H:%M:%S", "%Y-%m-%d %H:%M:%S"):
                 try:
-                    dt_ist = datetime.strptime(dt_str, fmt).replace(tzinfo=ist)
+                    dt_ist = datetime.strptime(dt_str, fmt).replace(tzinfo=_IST)
                     break
                 except ValueError:
                     continue
             else:
-                logger.warning("Cannot parse POS date: %s", dt_str)
+                logger.warning("Cannot parse POS date/time: %s", dt_str)
                 continue
 
             dt_utc = dt_ist.astimezone(timezone.utc).isoformat()
-            store_id = "STORE_BLR_002"  # ST1008 maps to canonical store ID
+
+            # Use store_id directly from CSV (ST1008, ST1076, etc.)
+            store_id = data["store_id"] or "ST1008"
 
             exists = await db.execute(
                 text("SELECT 1 FROM pos_transactions WHERE transaction_id = :tid"),
-                {"tid": inv},
+                {"tid": order_id},
             )
             if exists.fetchone():
                 continue
@@ -141,20 +153,25 @@ async def load_pos_transactions(csv_path: str, db: AsyncSession) -> int:
                         (transaction_id, store_id, timestamp, basket_value)
                     VALUES (:tid, :sid, :ts, :bv)
                 """),
-                {"tid": inv, "sid": store_id, "ts": dt_utc, "bv": round(data["total"], 2)},
+                {
+                    "tid": order_id,
+                    "sid": store_id,
+                    "ts":  dt_utc,
+                    "bv":  round(data["total"], 2),
+                },
             )
             loaded += 1
 
         except Exception as exc:
-            logger.warning("POS invoice error %s: %s", inv, exc)
+            logger.warning("POS order error %s: %s", order_id, exc)
 
     await db.commit()
-    logger.info("Loaded %d POS transactions (from invoices)", loaded)
+    logger.info("Loaded %d POS transactions", loaded)
     return loaded
 
 
 def build_ingest_batches(
     events: List[StoreEvent], batch_size: int = 500
 ) -> List[List[StoreEvent]]:
-    """Split event list into batches of up to batch_size."""
+    """Split event list into batches of at most batch_size."""
     return [events[i:i + batch_size] for i in range(0, len(events), batch_size)]
