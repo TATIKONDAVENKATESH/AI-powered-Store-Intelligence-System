@@ -118,12 +118,11 @@ curl http://localhost:8000/health
 
 ## Implementation Notes
 
-- **Conversion window:** 30-minute billing-zone × POS correlation (widened from spec's 5 min — historical footage has larger lag between zone events and POS timestamps)
-- **Dead zone:** computed relative to `MAX(timestamp)` in the dataset, not wall-clock time
-- **YOLO confidence:** 0.25 (lowered from 0.4 — face-blurred footage reduces feature contrast)
-- **Staff detection:** HSV uniform colour per store — pink/magenta for ST1076, black for ST1008
-- **POS grouping:** CSV is product-level rows; grouped by `order_id` into one transaction per basket
-
+- **Conversion window:** 5-minute billing-zone × POS correlation (matches challenge specification; visitors in billing within 300 seconds before a transaction are counted as converted)
+- **Dead zone:** computed relative to `MAX(timestamp)` in the dataset, not wall-clock time (prevents all historical clips from appearing stale)
+- **YOLO confidence:** 0.25 (lowered from the default 0.4 because face-blurred footage reduces detection confidence)
+- **Staff detection:** HSV uniform-colour classification per store (pink/magenta for ST1076, black for ST1008)
+- **POS grouping:** CSV contains product-level rows; grouped by `order_id` into a single transaction representing one customer basket
 ---
 
 ## Testing
@@ -132,7 +131,7 @@ curl http://localhost:8000/health
 pytest tests/ -v --cov=app --cov=pipeline --cov-report=term-missing
 ```
 
-8 test files, all using in-memory SQLite. Each file has a `# PROMPT:` / `# CHANGES MADE:` block at the top.
+10 test files, all using in-memory SQLite. Each file has a `# PROMPT:` / `# CHANGES MADE:` block at the top.
 
 ---
 
