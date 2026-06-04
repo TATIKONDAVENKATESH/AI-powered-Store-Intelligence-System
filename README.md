@@ -21,77 +21,63 @@ Single machine. No message queues. Starts with `docker compose up`.
 
 ## Two Stores
 
-| Store | Footage | Cameras |
-|---|---|---|
-| `ST1076` | March 2026 | CAM3 (entry), CAM1 (zone), CAM2 (zone), CAM6 (billing) |
+| Store | Footage | Cameras                                                                          |
+|---|---|----------------------------------------------------------------------------------|
+| `ST1076` | March 2026 | CAM3 (entry), CAM1 (zone), CAM2 (zone), CAM5 (billing)                           |
 | `ST1008` | April 2026 | CAM_ENTRY_1 (entry), CAM_ENTRY_2 (entry), CAM_ZONE (zone), CAM_BILLING (billing) |
 
 ---
 
 ## Quick Start
 
-### Option A — No videos needed (pre-generated events)
+### Docker
 
 ```bash
 git clone <repo-url> store-intelligence && cd store-intelligence
+
 docker compose up --build
 
 # new terminal
-bash pipeline/run_sample.sh      # Linux/macOS
-pipeline\run_sample.bat          # Windows
-
-Dashboard: http://localhost:8501
-API Docs:  http://localhost:8000/docs
-```
-
-### Option B — Full pipeline (videos required)
-
-```bash
-docker compose up --build
-
 bash pipeline/run.sh             # Linux/macOS
 pipeline\run.bat                 # Windows
 ```
 
-### Local (no Docker)
+Dashboard: http://localhost:8501
+
+API Docs: http://localhost:8000/docs
+
+### Local (No Docker)
 
 ```bash
 pip install torch==2.3.0+cpu torchvision==0.18.0+cpu \
     --index-url https://download.pytorch.org/whl/cpu
+
 pip install -r requirements.txt
 
 uvicorn app.main:app --host 0.0.0.0 --port 8000   # terminal 1
-bash pipeline/run_sample.sh                         # terminal 2
-streamlit run dashboard/streamlit_app.py            # terminal 3
-```
 
+bash pipeline/run.sh                               # terminal 2 (Linux/macOS)
+pipeline\run.bat                                  # terminal 2 (Windows)
+
+streamlit run dashboard/streamlit_app.py          # terminal 3
+```
 ---
+run.sh / run.bat ingests the included generated events into the API.
 
 ## Dataset
 
-Videos are **not included**. Place MP4 files here before running the full pipeline:
+The repository includes:
 
-```
-data/Videos/
-├── Store 1/
-│   ├── CAM 1 - zone.mp4
-│   ├── CAM 2 - zone.mp4
-│   ├── CAM 3 - entry.mp4
-│   └── CAM 5 - billing.mp4
-└── Store 2/
-    ├── entry 1.mp4
-    ├── entry 2.mp4
-    ├── zone.mp4
-    └── billing_area.mp4
-```
+* `data/pos_transactions.csv` — POS transaction data
+* `data/generated_events/all_events.jsonl` — generated events from both stores
+* `config/store_layout.json` — store zones, camera mappings, and configuration
 
-**Included in repo:**
-- `data/pos_transactions.csv` — POS data (columns: `order_id, order_date, order_time, store_id, product_id, brand_name, total_amount`)
-- `data/generated_events/all_events.jsonl` — 1,479 pre-generated events from both stores
-- `data/generated_events/sample_events.jsonl` — 13 events for quick testing
+### CCTV Footage
 
-The sample event file allows viewers to test the API and dashboard
-without running YOLO inference or providing CCTV footage.
+The original CCTV videos used to generate the events are not included in this repository. The system can be evaluated using the provided generated events without requiring access to the source footage.
+
+
+The included event files allow reviewers to test the API and dashboard without running YOLO inference or requiring access to the original CCTV footage.
 
 - `config/store_layout.json` — zone polygons, camera roles, staff HSV params
 
@@ -131,7 +117,7 @@ curl http://localhost:8000/health
 pytest tests/ -v --cov=app --cov=pipeline --cov-report=term-missing
 ```
 
-10 test files, all using in-memory SQLite. Each file has a `# PROMPT:` / `# CHANGES MADE:` block at the top.
+9 test files, all using in-memory SQLite. Each file has a `# PROMPT:` / `# CHANGES MADE:` block at the top.
 
 ---
 
@@ -164,12 +150,12 @@ pytest tests/ -v --cov=app --cov=pipeline --cov-report=term-missing
 
 ```
 store-intelligence/
-├── pipeline/       detect.py  tracker.py  emit.py  ingest_events.py  run.sh  run.bat  run_sample.sh  run_sample.bat
+├── pipeline/       detect.py  tracker.py  emit.py  ingest_events.py  run.sh  run.bat
 ├── app/            main.py  models.py  ingestion.py  metrics.py  funnel.py  heatmap.py  anomalies.py  health.py
 ├── storage/        schema.sql
 ├── data/           Videos/  pos_transactions.csv  generated_events/
 ├── config/         store_layout.json
-├── tests/          8 test files + conftest.py
+├── tests/          9 test files + conftest.py
 ├── docs/           DESIGN.md  CHOICES.md
 ├── dashboard/      streamlit_app.py
 ├── Dockerfile
