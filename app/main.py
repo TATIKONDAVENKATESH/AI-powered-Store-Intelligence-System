@@ -11,7 +11,15 @@ from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
 
-from app.models import IngestRequest, IngestResponse
+from app.models import (
+    IngestRequest,
+    IngestResponse,
+    MetricsResponse,
+    FunnelResponse,
+    HeatmapResponse,
+    AnomalyResponse,
+    HealthResponse,
+)
 from app.ingestion import ingest_events, load_pos_transactions
 from app.metrics import compute_metrics
 from app.funnel import compute_funnel
@@ -119,7 +127,18 @@ async def ingest(payload: IngestRequest, db: AsyncSession = Depends(get_db)):
     return await ingest_events(payload.events, db)
 
 
-@app.get("/stores/{store_id}/metrics")
+@app.get(
+    "/stores/{store_id}/metrics",
+    response_model=MetricsResponse,
+    summary="Store Metrics",
+    description="""
+Real-time store metrics.
+
+Example store IDs:
+- ST1008
+- ST1076
+"""
+)
 async def metrics(
     store_id: str = Path(
         ...,
@@ -128,10 +147,20 @@ async def metrics(
     ),
     db: AsyncSession = Depends(get_db),
 ):
-    """Real-time store metrics: unique visitors, conversion rate, dwell, queue, abandonment."""
     return await compute_metrics(store_id, db)
 
-@app.get("/stores/{store_id}/funnel")
+@app.get(
+    "/stores/{store_id}/funnel",
+    response_model=FunnelResponse,
+    summary="Store Funnel",
+    description="""
+4-stage conversion funnel.
+
+Example store IDs:
+- ST1008
+- ST1076
+"""
+)
 async def funnel(
     store_id: str = Path(
         ...,
@@ -142,7 +171,18 @@ async def funnel(
 ):
     return await compute_funnel(store_id, db)
 
-@app.get("/stores/{store_id}/heatmap")
+@app.get(
+    "/stores/{store_id}/heatmap",
+    response_model=HeatmapResponse,
+    summary="Store Heatmap",
+    description="""
+Zone visit frequency and average dwell.
+
+Example store IDs:
+- ST1008
+- ST1076
+"""
+)
 async def heatmap(
     store_id: str = Path(
         ...,
@@ -153,7 +193,18 @@ async def heatmap(
 ):
     return await compute_heatmap(store_id, db)
 
-@app.get("/stores/{store_id}/anomalies")
+@app.get(
+    "/stores/{store_id}/anomalies",
+    response_model=AnomalyResponse,
+    summary="Store Anomalies",
+    description="""
+Detected operational anomalies.
+
+Example store IDs:
+- ST1008
+- ST1076
+"""
+)
 async def anomalies(
     store_id: str = Path(
         ...,
@@ -164,7 +215,10 @@ async def anomalies(
 ):
     return await compute_anomalies(store_id, db)
 
-@app.get("/health")
+@app.get(
+    "/health",
+    response_model=HealthResponse,
+    summary="Service Health",
+)
 async def health(db: AsyncSession = Depends(get_db)):
-    """Service health: DB connectivity and per-camera feed staleness."""
     return await compute_health(db)
