@@ -28,7 +28,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # ── Database ──────────────────────────────────────────────────────────────────
-# FIXED: default must use sqlite+aiosqlite:// prefix for async SQLAlchemy
+# default must use sqlite+aiosqlite:// prefix for async SQLAlchemy
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "sqlite+aiosqlite:///./storage/store_intelligence.db",
