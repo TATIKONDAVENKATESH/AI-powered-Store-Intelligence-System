@@ -5,7 +5,7 @@ import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response, Depends
+from fastapi import FastAPI, Request, Response, Depends, Path
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
@@ -120,28 +120,49 @@ async def ingest(payload: IngestRequest, db: AsyncSession = Depends(get_db)):
 
 
 @app.get("/stores/{store_id}/metrics")
-async def metrics(store_id: str, db: AsyncSession = Depends(get_db)):
+async def metrics(
+    store_id: str = Path(
+        ...,
+        description="Valid store IDs: ST1008, ST1076",
+        example="ST1008",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
     """Real-time store metrics: unique visitors, conversion rate, dwell, queue, abandonment."""
     return await compute_metrics(store_id, db)
 
-
 @app.get("/stores/{store_id}/funnel")
-async def funnel(store_id: str, db: AsyncSession = Depends(get_db)):
-    """4-stage conversion funnel with per-stage drop-off percentages."""
+async def funnel(
+    store_id: str = Path(
+        ...,
+        description="Valid store IDs: ST1008, ST1076",
+        example="ST1008",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
     return await compute_funnel(store_id, db)
 
-
 @app.get("/stores/{store_id}/heatmap")
-async def heatmap(store_id: str, db: AsyncSession = Depends(get_db)):
-    """Zone visit frequency and avg dwell, normalised 0–100."""
+async def heatmap(
+    store_id: str = Path(
+        ...,
+        description="Valid store IDs: ST1008, ST1076",
+        example="ST1008",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
     return await compute_heatmap(store_id, db)
 
-
 @app.get("/stores/{store_id}/anomalies")
-async def anomalies(store_id: str, db: AsyncSession = Depends(get_db)):
-    """Active anomalies: queue spike, conversion drop, dead zone."""
+async def anomalies(
+    store_id: str = Path(
+        ...,
+        description="Valid store IDs: ST1008, ST1076",
+        example="ST1008",
+    ),
+    db: AsyncSession = Depends(get_db),
+):
     return await compute_anomalies(store_id, db)
-
 
 @app.get("/health")
 async def health(db: AsyncSession = Depends(get_db)):
