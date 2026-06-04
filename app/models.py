@@ -56,6 +56,32 @@ class StoreEvent(BaseModel):
 class IngestRequest(BaseModel):
     events: List[StoreEvent]
 
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "events": [
+                    {
+                        "event_id": "d11adb23-864d-47e5-961a-0e536677237e",
+                        "store_id": "ST1076",
+                        "camera_id": "CAM1",
+                        "visitor_id": "VIS_0002",
+                        "event_type": "ZONE_ENTER",
+                        "timestamp": "2026-03-08T13:00:00Z",
+                        "zone_id": "ST1076_Z02",
+                        "dwell_ms": 0,
+                        "is_staff": False,
+                        "confidence": 0.8384,
+                        "metadata": {
+                            "queue_depth": None,
+                            "sku_zone": None,
+                            "session_seq": 1
+                        }
+                    }
+                ]
+            }
+        }
+    }
+
     @field_validator("events")
     @classmethod
     def max_500_events(cls, v: list) -> list:
@@ -63,7 +89,6 @@ class IngestRequest(BaseModel):
         if len(v) > 500:
             raise ValueError(f"Batch size {len(v)} exceeds maximum of 500 events")
         return v
-
 
 class IngestResponse(BaseModel):
     accepted: int
