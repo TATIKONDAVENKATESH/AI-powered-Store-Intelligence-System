@@ -8,7 +8,6 @@ data/generated_events/*
 
 # Database
 
-storage/
 storage/*.db
 storage/*.sqlite
 storage/*.sqlite3
