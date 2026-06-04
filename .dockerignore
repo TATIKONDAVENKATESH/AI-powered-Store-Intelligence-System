@@ -3,7 +3,7 @@
 data/Videos/
 data/videos/
 data/camera_frames/
-data/generated_events/*
+!data/generated_events/*
 !data/generated_events/sample_events.jsonl
 
 # Database
