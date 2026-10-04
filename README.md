@@ -161,7 +161,7 @@ Test files each have a `# PROMPT:` / `# CHANGES MADE:` block at the top document
 
 ---
 
-## Part E — Live Dashboard (Bonus +10)
+## Live Dashboard
 
 The Streamlit dashboard (`dashboard/streamlit_app.py`) provides:
 

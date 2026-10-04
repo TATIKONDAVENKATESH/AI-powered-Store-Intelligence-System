@@ -313,7 +313,7 @@ Tests use an in-memory SQLite database (`sqlite+aiosqlite://` with `StaticPool`)
 | POS CSV timestamps are in IST (`Asia/Kolkata`) | `ingestion.py` ZoneInfo | Configurable timezone per store |
 | Staff uniform colour is known per store | `store_layout.json` HSV bounds | HSV range calibration from sample frames |
 | CPU-only inference is acceptable | `yolov8n.pt`, no CUDA | GPU enables larger models and OSNet Re-ID |
-| Batch processing is acceptable for Part A/B | JSONL intermediate, then single ingest run | RTSP streaming for live queue metrics |
+| Batch processing is sufficient for baseline analysis | JSONL intermediate, then single ingest run | RTSP streaming for live queue metrics |
 | Historical clips may start while customers are already inside | Zone counts can exceed entry counts | Clips anchored to store open time |
 
 ---
