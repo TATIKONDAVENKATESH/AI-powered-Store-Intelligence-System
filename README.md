@@ -2,6 +2,8 @@
 
 > CCTV footage → person detection → structured events → live analytics API → dashboard.
 
+**🟢 Live Demo:** [Store Intelligence — Live](https://store-intelligence-dashboard-uuvz.onrender.com/) *(Note: Hosted on free tier, may take ~50 seconds to wake up from inactivity)*
+
 **North Star Metric:** `Conversion Rate = Purchasing Visitors ÷ Total Unique Visitors`
 
 ---
