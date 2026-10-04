@@ -14,7 +14,8 @@ sleep 5
 echo "3. Ingesting pre-generated events into the database..."
 python pipeline/ingest_events.py --file data/generated_events/all_events.jsonl --batch-size 500 --workers 4
 
-echo "4. Starting Streamlit Dashboard on port 7860..."
+echo "4. Starting Streamlit Dashboard..."
 export STORE_IDS="ST1076,ST1008"
-# Hugging Face Spaces exposes port 7860 by default
-streamlit run dashboard/streamlit_app.py --server.port 7860 --server.address 0.0.0.0 --server.headless true
+# Render.com provides a dynamic $PORT. Fallback to 7860 if not set.
+DASHBOARD_PORT=${PORT:-7860}
+streamlit run dashboard/streamlit_app.py --server.port $DASHBOARD_PORT --server.address 0.0.0.0 --server.headless true
