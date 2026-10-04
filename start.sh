@@ -13,7 +13,7 @@ DASHBOARD_PORT=${PORT:-7860}
 streamlit run dashboard/streamlit_app.py --server.port $DASHBOARD_PORT --server.address 0.0.0.0 --server.headless true &
 
 echo "3. Waiting for API to be healthy..."
-while ! curl -s http://localhost:8000/health > /dev/null; do
+while ! python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')" 2>/dev/null; do
     echo "Waiting for API..."
     sleep 2
 done
