@@ -1,8 +1,10 @@
 from __future__ import annotations
-from typing import Optional, List, Literal
-from pydantic import BaseModel, Field, field_validator
-from datetime import datetime
+
 import uuid
+from datetime import datetime
+from typing import Literal
+
+from pydantic import BaseModel, Field, field_validator
 
 # All 8 event types from the challenge spec
 EventType = Literal[
@@ -20,9 +22,9 @@ SeverityLevel = Literal["INFO", "WARN", "CRITICAL"]
 
 
 class EventMetadata(BaseModel):
-    queue_depth: Optional[int] = None   # integer for BILLING_QUEUE_JOIN, else null
-    sku_zone: Optional[str] = None      # zone label from store_layout.json
-    session_seq: int = 0                # ordinal position in visitor session
+    queue_depth: int | None = None  # integer for BILLING_QUEUE_JOIN, else null
+    sku_zone: str | None = None  # zone label from store_layout.json
+    session_seq: int = 0  # ordinal position in visitor session
 
 
 class StoreEvent(BaseModel):
@@ -31,9 +33,9 @@ class StoreEvent(BaseModel):
     camera_id: str
     visitor_id: str
     event_type: EventType
-    timestamp: str                      # ISO-8601 UTC string
-    zone_id: Optional[str] = None       # null for ENTRY/EXIT events
-    dwell_ms: int = 0                   # duration; 0 for instantaneous events
+    timestamp: str  # ISO-8601 UTC string
+    zone_id: str | None = None  # null for ENTRY/EXIT events
+    dwell_ms: int = 0  # duration; 0 for instantaneous events
     is_staff: bool = False
     confidence: float = Field(ge=0.0, le=1.0)
     metadata: EventMetadata = Field(default_factory=EventMetadata)
@@ -41,20 +43,20 @@ class StoreEvent(BaseModel):
     @field_validator("timestamp")
     @classmethod
     def validate_timestamp(cls, v: str) -> str:
-        """Reject events with unparseable timestamps."""
+        # Reject events with unparseable timestamps.
         datetime.fromisoformat(v.replace("Z", "+00:00"))
         return v
 
     @field_validator("event_id")
     @classmethod
     def validate_uuid(cls, v: str) -> str:
-        """Reject events with non-UUID event_ids."""
+        # Reject events with non-UUID event_ids.
         uuid.UUID(v)
         return v
 
 
 class IngestRequest(BaseModel):
-    events: List[StoreEvent]
+    events: list[StoreEvent]
 
     model_config = {
         "json_schema_extra": {
@@ -74,8 +76,8 @@ class IngestRequest(BaseModel):
                         "metadata": {
                             "queue_depth": None,
                             "sku_zone": None,
-                            "session_seq": 1
-                        }
+                            "session_seq": 1,
+                        },
                     }
                 ]
             }
@@ -85,16 +87,17 @@ class IngestRequest(BaseModel):
     @field_validator("events")
     @classmethod
     def max_500_events(cls, v: list) -> list:
-        """Enforce the 500-event batch limit from the challenge spec."""
+        # Enforce the 500-event batch limit from the challenge spec.
         if len(v) > 500:
             raise ValueError(f"Batch size {len(v)} exceeds maximum of 500 events")
         return v
+
 
 class IngestResponse(BaseModel):
     accepted: int
     rejected: int
     duplicates: int
-    errors: List[str] = []
+    errors: list[str] = []
 
 
 class ZoneDwell(BaseModel):
@@ -107,7 +110,7 @@ class MetricsResponse(BaseModel):
     store_id: str
     unique_visitors: int
     conversion_rate: float
-    avg_dwell_per_zone: List[ZoneDwell]
+    avg_dwell_per_zone: list[ZoneDwell]
     queue_depth: int
     abandonment_rate: float
     total_transactions: int
@@ -122,22 +125,22 @@ class FunnelStage(BaseModel):
 
 class FunnelResponse(BaseModel):
     store_id: str
-    stages: List[FunnelStage]
+    stages: list[FunnelStage]
     computed_at: str
 
 
 class HeatmapZone(BaseModel):
     zone_id: str
-    sku_zone: Optional[str]
+    sku_zone: str | None
     visit_frequency: int
     avg_dwell_seconds: float
     normalised_score: float
-    data_confidence: bool   # False if fewer than 20 sessions in window
+    data_confidence: bool  # False if fewer than 20 sessions in window
 
 
 class HeatmapResponse(BaseModel):
     store_id: str
-    zones: List[HeatmapZone]
+    zones: list[HeatmapZone]
     computed_at: str
 
 
@@ -151,20 +154,20 @@ class Anomaly(BaseModel):
 
 class AnomalyResponse(BaseModel):
     store_id: str
-    anomalies: List[Anomaly]
+    anomalies: list[Anomaly]
     computed_at: str
 
 
 class CameraFeedStatus(BaseModel):
     camera_id: str
-    last_event_at: Optional[str]
-    stale: bool   # True if >10 min since last event
+    last_event_at: str | None
+    stale: bool  # True if >10 min since last event
 
 
 class HealthResponse(BaseModel):
     status: Literal["ok", "degraded", "down"]
-    store_feeds: List[CameraFeedStatus]
-    last_event_at: Optional[str]
+    store_feeds: list[CameraFeedStatus]
+    last_event_at: str | None
     stale_feed: bool
     db_connected: bool
     checked_at: str

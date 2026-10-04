@@ -57,3 +57,21 @@ services:
       --server.address 0.0.0.0
       --server.headless true
     restart: unless-stopped
+
+  ingester:
+    image: store-intelligence:latest
+    container_name: store_intelligence_ingester
+    volumes:
+      - ./data:/app/data
+      - ./pipeline:/app/pipeline
+    environment:
+      - API_URL=http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+    command: >
+      python pipeline/ingest_events.py
+      --file data/generated_events/all_events.jsonl
+      --batch-size 500
+      --workers 4
+    restart: "no"

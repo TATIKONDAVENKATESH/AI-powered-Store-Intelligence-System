@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models import FunnelResponse, FunnelStage
 
 logger = logging.getLogger(__name__)
@@ -61,7 +64,7 @@ async def compute_funnel(store_id: str, db: AsyncSession) -> FunnelResponse:
             INNER JOIN pos_transactions p
                 ON  p.store_id = e.store_id
                 AND datetime(p.timestamp) >= datetime(e.timestamp)
-                AND datetime(p.timestamp) <= datetime(e.timestamp, '+1800 seconds')
+                AND datetime(p.timestamp) <= datetime(e.timestamp, '+300 seconds')
             WHERE e.store_id = :sid
               AND e.zone_id LIKE '%BILLING%'
               AND e.is_staff = 0
@@ -76,10 +79,22 @@ async def compute_funnel(store_id: str, db: AsyncSession) -> FunnelResponse:
         return round(((previous - current) / previous) * 100, 2)
 
     stages = [
-        FunnelStage(stage="Entry",         count=entry_count,    drop_off_pct=0.0),
-        FunnelStage(stage="Zone Visit",    count=zone_count,     drop_off_pct=drop_off(zone_count,     entry_count)),
-        FunnelStage(stage="Billing Queue", count=queue_count,    drop_off_pct=drop_off(queue_count,    zone_count)),
-        FunnelStage(stage="Purchase",      count=purchase_count, drop_off_pct=drop_off(purchase_count, queue_count)),
+        FunnelStage(stage="Entry", count=entry_count, drop_off_pct=0.0),
+        FunnelStage(
+            stage="Zone Visit",
+            count=zone_count,
+            drop_off_pct=drop_off(zone_count, entry_count),
+        ),
+        FunnelStage(
+            stage="Billing Queue",
+            count=queue_count,
+            drop_off_pct=drop_off(queue_count, zone_count),
+        ),
+        FunnelStage(
+            stage="Purchase",
+            count=purchase_count,
+            drop_off_pct=drop_off(purchase_count, queue_count),
+        ),
     ]
 
     logger.debug("Funnel store=%s stages=%s", store_id, [s.count for s in stages])

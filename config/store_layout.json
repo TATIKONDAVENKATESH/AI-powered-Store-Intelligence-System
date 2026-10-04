@@ -10,12 +10,6 @@
         "name": "pink_magenta"
       },
       "cameras": {
-        "CAM3": {
-          "role": "entry",
-          "video_file": "CAM 3 - entry.mp4",
-          "entry_line_y": 540,
-          "resolution": [1280, 960]
-        },
         "CAM1": {
           "role": "zone",
           "video_file": "CAM 1 - zone.mp4",
@@ -24,6 +18,12 @@
         "CAM2": {
           "role": "zone",
           "video_file": "CAM 2 - zone.mp4",
+          "resolution": [1280, 960]
+        },
+        "CAM3": {
+          "role": "entry",
+          "video_file": "CAM 3 - entry.mp4",
+          "entry_line_y": 540,
           "resolution": [1280, 960]
         },
         "CAM6": {

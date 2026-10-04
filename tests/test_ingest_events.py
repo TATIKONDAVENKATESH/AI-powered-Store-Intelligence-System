@@ -1,9 +1,12 @@
+# PROMPT: Write unit tests for the pipeline ingestion script (ingest_events.py), handling CLI args, JSONL reading, and HTTP POST mocking.
+# CHANGES MADE: Replaced requests.post with a mock and handled HTTP errors correctly.
+
 from __future__ import annotations
+
 import json
 import os
 import sys
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -13,6 +16,7 @@ import pipeline.ingest_events as ingest_mod
 def _make_event(i: int = 0) -> dict:
     """Build a minimal valid event dict for the JSONL file."""
     import uuid
+
     return {
         "event_id": str(uuid.uuid4()),
         "store_id": "STORE_BLR_002",
@@ -30,17 +34,18 @@ def _make_event(i: int = 0) -> dict:
 
 def _write_jsonl(path: str, events: list) -> None:
     with open(path, "w") as f:
-        for ev in events:
-            f.write(json.dumps(ev) + "\n")
+        f.writelines(json.dumps(ev) + "\n" for ev in events)
 
 
 def _mock_response(accepted=1, rejected=0, duplicates=0):
     """Build a mock urllib response object."""
-    resp_data = json.dumps({
-        "accepted": accepted,
-        "rejected": rejected,
-        "duplicates": duplicates,
-    }).encode()
+    resp_data = json.dumps(
+        {
+            "accepted": accepted,
+            "rejected": rejected,
+            "duplicates": duplicates,
+        }
+    ).encode()
     mock_resp = MagicMock()
     mock_resp.read.return_value = resp_data
     mock_resp.__enter__ = lambda s: s
@@ -50,6 +55,7 @@ def _mock_response(accepted=1, rejected=0, duplicates=0):
 
 # ── Missing file ──────────────────────────────────────────────────────────────
 
+
 def test_main_missing_file_prints_and_returns(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ingest_mod, "JSONL", str(tmp_path / "nonexistent.jsonl"))
     ingest_mod.main()  # should not raise
@@ -58,6 +64,7 @@ def test_main_missing_file_prints_and_returns(tmp_path, monkeypatch, capsys):
 
 
 # ── Empty file ────────────────────────────────────────────────────────────────
+
 
 def test_main_empty_file(tmp_path, monkeypatch, capsys):
     jsonl = tmp_path / "empty.jsonl"
@@ -72,13 +79,16 @@ def test_main_empty_file(tmp_path, monkeypatch, capsys):
 
 # ── Happy path: events ingested ───────────────────────────────────────────────
 
+
 def test_main_ingests_events(tmp_path, monkeypatch, capsys):
     jsonl = tmp_path / "events.jsonl"
     _write_jsonl(str(jsonl), [_make_event(i) for i in range(3)])
     monkeypatch.setattr(ingest_mod, "JSONL", str(jsonl))
     monkeypatch.setattr(ingest_mod, "API_URL", "http://localhost:8000")
 
-    with patch("urllib.request.urlopen", return_value=_mock_response(accepted=3)) as mock_url:
+    with patch(
+        "urllib.request.urlopen", return_value=_mock_response(accepted=3)
+    ) as mock_url:
         ingest_mod.main()
 
     mock_url.assert_called_once()
@@ -89,6 +99,7 @@ def test_main_ingests_events(tmp_path, monkeypatch, capsys):
 
 # ── Batch splitting ───────────────────────────────────────────────────────────
 
+
 def test_main_splits_into_batches(tmp_path, monkeypatch, capsys):
     """600 events with BATCH=500 → 2 HTTP calls."""
     jsonl = tmp_path / "big.jsonl"
@@ -96,7 +107,9 @@ def test_main_splits_into_batches(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(ingest_mod, "JSONL", str(jsonl))
     monkeypatch.setattr(ingest_mod, "BATCH", 500)
 
-    with patch("urllib.request.urlopen", return_value=_mock_response(accepted=500)) as mock_url:
+    with patch(
+        "urllib.request.urlopen", return_value=_mock_response(accepted=500)
+    ) as mock_url:
         ingest_mod.main()
 
     assert mock_url.call_count == 2  # ceil(600/500) = 2 batches
@@ -104,13 +117,18 @@ def test_main_splits_into_batches(tmp_path, monkeypatch, capsys):
 
 # ── HTTP error ────────────────────────────────────────────────────────────────
 
+
 def test_main_http_error_printed(tmp_path, monkeypatch, capsys):
     import urllib.error
+
     jsonl = tmp_path / "events.jsonl"
     _write_jsonl(str(jsonl), [_make_event()])
     monkeypatch.setattr(ingest_mod, "JSONL", str(jsonl))
 
-    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("connection refused")):
+    with patch(
+        "urllib.request.urlopen",
+        side_effect=urllib.error.URLError("connection refused"),
+    ):
         ingest_mod.main()
 
     captured = capsys.readouterr()
@@ -118,6 +136,7 @@ def test_main_http_error_printed(tmp_path, monkeypatch, capsys):
 
 
 # ── Total accepted printed ────────────────────────────────────────────────────
+
 
 def test_main_prints_total_accepted(tmp_path, monkeypatch, capsys):
     jsonl = tmp_path / "events.jsonl"

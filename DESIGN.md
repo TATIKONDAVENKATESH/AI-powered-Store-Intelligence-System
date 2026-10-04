@@ -24,7 +24,7 @@ Every component either improves the accuracy of this number (detection layer) or
 
 ### Stores Covered
 
-Two stores are processed in this submission:
+Two stores are processed in this project:
 
 - **ST1076** — Purplle Store Mumbai 1076, footage from March 2026 (4 cameras: CAM3 entry, CAM1 zone, CAM2 zone, CAM6 billing)
 - **ST1008** — second store, footage from April 2026 (4 cameras: CAM\_ENTRY\_1, CAM\_ENTRY\_2, CAM\_ZONE, CAM\_BILLING)
@@ -103,8 +103,8 @@ Key parameters:
 Each entry camera has an `entry_line_y` pixel value in `store_layout.json`. Direction is determined by centroid y-coordinate transition across that line:
 
 ```python
-crossed_inbound  = prev_y < entry_line_y <= cy   # ENTRY or REENTRY
-crossed_outbound = prev_y >= entry_line_y > cy   # EXIT
+crossed_inbound = prev_y < entry_line_y <= cy  # ENTRY or REENTRY
+crossed_outbound = prev_y >= entry_line_y > cy  # EXIT
 ```
 
 **Zone polygon hit-testing (zone and billing cameras):**

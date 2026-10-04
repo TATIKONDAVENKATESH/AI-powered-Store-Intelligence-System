@@ -1,3 +1,6 @@
+# PROMPT: Write tests for the ingestion layer focusing on batch sizes, idempotency, event_id deduplication, and Pydantic schema validation.
+# CHANGES MADE: Adjusted the assertions for Pydantic v2 error structures and SQLite constraints.
+
 """
 test_ingestion.py — Tests for app/ingestion.py
 
@@ -23,23 +26,24 @@ IMPORTANT FIXES vs original test_ingest.py:
 3. Rows are only skipped when composite key cannot be formed:
    missing store_id AND missing date AND missing time simultaneously.
 """
+
 from __future__ import annotations
 
+import csv
 import os
 import sys
-import csv
 import uuid
+
 import pytest
 import pytest_asyncio
-from unittest.mock import MagicMock
-from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from app.models import StoreEvent, EventMetadata
-from app.ingestion import ingest_events, load_pos_transactions, build_ingest_batches
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from app.ingestion import build_ingest_batches, ingest_events, load_pos_transactions
+from app.models import EventMetadata, StoreEvent
 
 _SCHEMA_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "storage", "schema.sql")
@@ -64,6 +68,7 @@ async def db_session():
 
 # ── Event builder ─────────────────────────────────────────────────────────────
 
+
 def _event(event_id: str = None, store_id: str = "ST1076") -> StoreEvent:
     return StoreEvent(
         event_id=event_id or str(uuid.uuid4()),
@@ -81,10 +86,18 @@ def _event(event_id: str = None, store_id: str = "ST1076") -> StoreEvent:
 # Matches the ACTUAL POS CSV format: order_id, order_date, order_time, store_id,
 # product_id, brand_name, total_amount  (no invoice_number in real CSV)
 
+
 def _write_pos_csv_minimal(path: str, rows: list[dict]) -> None:
     """Write POS CSV with only the columns the real CSV has (no invoice_number)."""
-    fieldnames = ["order_id", "order_date", "order_time", "store_id",
-                  "product_id", "brand_name", "total_amount"]
+    fieldnames = [
+        "order_id",
+        "order_date",
+        "order_time",
+        "store_id",
+        "product_id",
+        "brand_name",
+        "total_amount",
+    ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
@@ -97,8 +110,14 @@ def _write_pos_csv_minimal(path: str, rows: list[dict]) -> None:
 def _write_pos_csv_with_invoice(path: str, rows: list[dict]) -> None:
     """Write POS CSV that includes an invoice_number column (enriched test format)."""
     fieldnames = [
-        "order_id", "order_date", "order_time", "store_id",
-        "product_id", "brand_name", "total_amount", "invoice_number",
+        "order_id",
+        "order_date",
+        "order_time",
+        "store_id",
+        "product_id",
+        "brand_name",
+        "total_amount",
+        "invoice_number",
     ]
     with open(path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -110,6 +129,7 @@ def _write_pos_csv_with_invoice(path: str, rows: list[dict]) -> None:
 
 
 # ── ingest_events: happy path ─────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_ingest_single_event(db_session):
@@ -139,6 +159,7 @@ async def test_ingest_empty_batch(db_session):
 
 
 # ── ingest_events: idempotency ────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_ingest_duplicate_counted_not_inserted(db_session):
@@ -173,6 +194,7 @@ async def test_ingest_mixed_new_and_duplicate(db_session):
 
 
 # ── ingest_events: data persistence ──────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_ingest_staff_flag_stored_as_integer(db_session):
@@ -214,9 +236,11 @@ async def test_ingest_all_fields_persisted(db_session):
     )
     await ingest_events([ev], db_session)
     row = await db_session.execute(
-        text("SELECT store_id, camera_id, visitor_id, event_type, zone_id, dwell_ms, "
-             "confidence, is_staff, sku_zone, session_seq FROM events WHERE event_id=:eid"),
-        {"eid": eid}
+        text(
+            "SELECT store_id, camera_id, visitor_id, event_type, zone_id, dwell_ms, "
+            "confidence, is_staff, sku_zone, session_seq FROM events WHERE event_id=:eid"
+        ),
+        {"eid": eid},
     )
     r = row.fetchone()
     assert r[0] == "ST1076"
@@ -233,17 +257,20 @@ async def test_ingest_all_fields_persisted(db_session):
 
 # ── ingest_events: error handling ─────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_ingest_db_error_counted_as_rejected(db_session):
     """
     Exception during INSERT is caught → event counted as rejected, error logged.
     Strategy: make metadata.queue_depth raise on access inside the try block.
     """
+
     class BrokenMeta:
         @property
         def queue_depth(self):
             raise RuntimeError("Simulated DB error")
-        sku_zone    = None
+
+        sku_zone = None
         session_seq = 0
 
     bad_ev = _event()
@@ -258,14 +285,16 @@ async def test_ingest_db_error_counted_as_rejected(db_session):
 @pytest.mark.asyncio
 async def test_ingest_error_does_not_prevent_other_events(db_session):
     """A rejected event must not block subsequent events in the same batch."""
+
     class BrokenMeta:
         @property
         def queue_depth(self):
             raise RuntimeError("fail")
-        sku_zone    = None
+
+        sku_zone = None
         session_seq = 0
 
-    bad_ev  = _event()
+    bad_ev = _event()
     bad_ev.metadata = BrokenMeta()
     good_ev = _event()
 
@@ -276,6 +305,7 @@ async def test_ingest_error_does_not_prevent_other_events(db_session):
 
 # ── load_pos_transactions: composite key (real CSV format) ────────────────────
 
+
 @pytest.mark.asyncio
 async def test_load_pos_composite_key_real_csv_format(db_session, tmp_path):
     """
@@ -283,13 +313,18 @@ async def test_load_pos_composite_key_real_csv_format(db_session, tmp_path):
     Row must be loaded successfully.
     """
     csv_file = tmp_path / "pos.csv"
-    _write_pos_csv_minimal(str(csv_file), [{
-        "order_id":    "1",
-        "order_date":  "10-04-2026",
-        "order_time":  "14:30:00",
-        "store_id":    "ST1008",
-        "total_amount": "500.00",
-    }])
+    _write_pos_csv_minimal(
+        str(csv_file),
+        [
+            {
+                "order_id": "1",
+                "order_date": "10-04-2026",
+                "order_time": "14:30:00",
+                "store_id": "ST1008",
+                "total_amount": "500.00",
+            }
+        ],
+    )
     loaded = await load_pos_transactions(str(csv_file), db_session)
     assert loaded == 1
 
@@ -298,13 +333,18 @@ async def test_load_pos_composite_key_real_csv_format(db_session, tmp_path):
 async def test_load_pos_idempotent(db_session, tmp_path):
     """Loading the same POS CSV twice: second load returns 0 (all rows already exist)."""
     csv_file = tmp_path / "pos_idem.csv"
-    _write_pos_csv_minimal(str(csv_file), [{
-        "order_id":    "2",
-        "order_date":  "10-04-2026",
-        "order_time":  "15:00:00",
-        "store_id":    "ST1008",
-        "total_amount": "299.00",
-    }])
+    _write_pos_csv_minimal(
+        str(csv_file),
+        [
+            {
+                "order_id": "2",
+                "order_date": "10-04-2026",
+                "order_time": "15:00:00",
+                "store_id": "ST1008",
+                "total_amount": "299.00",
+            }
+        ],
+    )
     n1 = await load_pos_transactions(str(csv_file), db_session)
     n2 = await load_pos_transactions(str(csv_file), db_session)
     assert n1 == 1
@@ -318,18 +358,31 @@ async def test_load_pos_multi_sku_same_order_summed(db_session, tmp_path):
     Composite key = {store_id}_{order_date}_{order_time}.
     """
     csv_file = tmp_path / "pos_multi.csv"
-    _write_pos_csv_minimal(str(csv_file), [
-        {"order_id": "3", "order_date": "10-04-2026", "order_time": "16:00:00",
-         "store_id": "ST1008", "total_amount": "400.00"},
-        {"order_id": "3", "order_date": "10-04-2026", "order_time": "16:00:00",
-         "store_id": "ST1008", "total_amount": "150.00"},
-    ])
+    _write_pos_csv_minimal(
+        str(csv_file),
+        [
+            {
+                "order_id": "3",
+                "order_date": "10-04-2026",
+                "order_time": "16:00:00",
+                "store_id": "ST1008",
+                "total_amount": "400.00",
+            },
+            {
+                "order_id": "3",
+                "order_date": "10-04-2026",
+                "order_time": "16:00:00",
+                "store_id": "ST1008",
+                "total_amount": "150.00",
+            },
+        ],
+    )
     loaded = await load_pos_transactions(str(csv_file), db_session)
     assert loaded == 1
     key = "ST1008_10-04-2026_16:00:00"
     row = await db_session.execute(
         text("SELECT basket_value FROM pos_transactions WHERE transaction_id=:tid"),
-        {"tid": key}
+        {"tid": key},
     )
     val = row.scalar()
     assert abs(val - 550.0) < 0.01
@@ -341,19 +394,26 @@ async def test_load_pos_invoice_number_used_when_present(db_session, tmp_path):
     When invoice_number column IS present and non-empty, it is used as the transaction_id.
     """
     csv_file = tmp_path / "pos_inv.csv"
-    _write_pos_csv_with_invoice(str(csv_file), [{
-        "order_id":       "104363838",
-        "invoice_number": "ML0426KAP0001358",
-        "order_date":     "10-04-2026",
-        "order_time":     "14:30:00",
-        "store_id":       "ST1008",
-        "total_amount":   "500.00",
-    }])
+    _write_pos_csv_with_invoice(
+        str(csv_file),
+        [
+            {
+                "order_id": "104363838",
+                "invoice_number": "ML0426KAP0001358",
+                "order_date": "10-04-2026",
+                "order_time": "14:30:00",
+                "store_id": "ST1008",
+                "total_amount": "500.00",
+            }
+        ],
+    )
     loaded = await load_pos_transactions(str(csv_file), db_session)
     assert loaded == 1
     # The transaction_id should be the invoice number, not the composite key
     row = await db_session.execute(
-        text("SELECT transaction_id FROM pos_transactions WHERE transaction_id='ML0426KAP0001358'")
+        text(
+            "SELECT transaction_id FROM pos_transactions WHERE transaction_id='ML0426KAP0001358'"
+        )
     )
     assert row.scalar() == "ML0426KAP0001358"
 
@@ -365,14 +425,19 @@ async def test_load_pos_empty_invoice_falls_back_to_composite(db_session, tmp_pa
     (Not skipped — the composite key is valid.)
     """
     csv_file = tmp_path / "pos_noinv.csv"
-    _write_pos_csv_with_invoice(str(csv_file), [{
-        "order_id":       "104363838",
-        "invoice_number": "",            # empty → use composite key
-        "order_date":     "10-04-2026",
-        "order_time":     "13:00:00",
-        "store_id":       "ST1008",
-        "total_amount":   "350.00",
-    }])
+    _write_pos_csv_with_invoice(
+        str(csv_file),
+        [
+            {
+                "order_id": "104363838",
+                "invoice_number": "",  # empty → use composite key
+                "order_date": "10-04-2026",
+                "order_time": "13:00:00",
+                "store_id": "ST1008",
+                "total_amount": "350.00",
+            }
+        ],
+    )
     loaded = await load_pos_transactions(str(csv_file), db_session)
     # Composite key ST1008_10-04-2026_13:00:00 is valid → row loaded
     assert loaded == 1
@@ -384,18 +449,25 @@ async def test_load_pos_bad_total_amount_treated_as_zero(db_session, tmp_path):
     Non-numeric total_amount: ValueError is caught, amount stays 0, row is still loaded.
     """
     csv_file = tmp_path / "pos_bad_amt.csv"
-    _write_pos_csv_with_invoice(str(csv_file), [{
-        "order_id":       "999",
-        "invoice_number": "INV_BAD_AMT",
-        "order_date":     "10-04-2026",
-        "order_time":     "11:00:00",
-        "store_id":       "ST1008",
-        "total_amount":   "NOT_A_NUMBER",
-    }])
+    _write_pos_csv_with_invoice(
+        str(csv_file),
+        [
+            {
+                "order_id": "999",
+                "invoice_number": "INV_BAD_AMT",
+                "order_date": "10-04-2026",
+                "order_time": "11:00:00",
+                "store_id": "ST1008",
+                "total_amount": "NOT_A_NUMBER",
+            }
+        ],
+    )
     loaded = await load_pos_transactions(str(csv_file), db_session)
     assert loaded == 1
     row = await db_session.execute(
-        text("SELECT basket_value FROM pos_transactions WHERE transaction_id='INV_BAD_AMT'")
+        text(
+            "SELECT basket_value FROM pos_transactions WHERE transaction_id='INV_BAD_AMT'"
+        )
     )
     assert row.scalar() == 0.0
 
@@ -404,16 +476,29 @@ async def test_load_pos_bad_total_amount_treated_as_zero(db_session, tmp_path):
 async def test_load_pos_unparseable_date_row_skipped(db_session, tmp_path):
     """Row with completely unparseable date/time is skipped; valid rows still load."""
     csv_file = tmp_path / "pos_bad_date.csv"
-    _write_pos_csv_with_invoice(str(csv_file), [
-        {"order_id": "100", "invoice_number": "INV_BAD_DATE",
-         "order_date": "BADDATE", "order_time": "BADTIME",
-         "store_id": "ST1008", "total_amount": "100.00"},
-        {"order_id": "101", "invoice_number": "INV_GOOD",
-         "order_date": "10-04-2026", "order_time": "12:00:00",
-         "store_id": "ST1008", "total_amount": "200.00"},
-    ])
+    _write_pos_csv_with_invoice(
+        str(csv_file),
+        [
+            {
+                "order_id": "100",
+                "invoice_number": "INV_BAD_DATE",
+                "order_date": "BADDATE",
+                "order_time": "BADTIME",
+                "store_id": "ST1008",
+                "total_amount": "100.00",
+            },
+            {
+                "order_id": "101",
+                "invoice_number": "INV_GOOD",
+                "order_date": "10-04-2026",
+                "order_time": "12:00:00",
+                "store_id": "ST1008",
+                "total_amount": "200.00",
+            },
+        ],
+    )
     loaded = await load_pos_transactions(str(csv_file), db_session)
-    assert loaded == 1   # only the valid row
+    assert loaded == 1  # only the valid row
 
 
 @pytest.mark.asyncio
@@ -430,13 +515,18 @@ async def test_load_pos_row_with_no_identifying_info_skipped(db_session, tmp_pat
     → cannot form any key → row skipped.
     """
     csv_file = tmp_path / "pos_empty.csv"
-    _write_pos_csv_minimal(str(csv_file), [{
-        "order_id":    "",
-        "order_date":  "",
-        "order_time":  "",
-        "store_id":    "",
-        "total_amount": "100.00",
-    }])
+    _write_pos_csv_minimal(
+        str(csv_file),
+        [
+            {
+                "order_id": "",
+                "order_date": "",
+                "order_time": "",
+                "store_id": "",
+                "total_amount": "100.00",
+            }
+        ],
+    )
     loaded = await load_pos_transactions(str(csv_file), db_session)
     assert loaded == 0
 
@@ -447,13 +537,18 @@ async def test_load_pos_ist_to_utc_conversion(db_session, tmp_path):
     Timestamps are in IST (UTC+5:30). A time of 12:00:00 IST should be stored as 06:30:00 UTC.
     """
     csv_file = tmp_path / "pos_ist.csv"
-    _write_pos_csv_minimal(str(csv_file), [{
-        "order_id":    "200",
-        "order_date":  "10-04-2026",
-        "order_time":  "12:00:00",
-        "store_id":    "ST1008",
-        "total_amount": "100.00",
-    }])
+    _write_pos_csv_minimal(
+        str(csv_file),
+        [
+            {
+                "order_id": "200",
+                "order_date": "10-04-2026",
+                "order_time": "12:00:00",
+                "store_id": "ST1008",
+                "total_amount": "100.00",
+            }
+        ],
+    )
     await load_pos_transactions(str(csv_file), db_session)
     row = await db_session.execute(
         text("SELECT timestamp FROM pos_transactions WHERE store_id='ST1008'")
@@ -465,6 +560,7 @@ async def test_load_pos_ist_to_utc_conversion(db_session, tmp_path):
 
 
 # ── build_ingest_batches ───────────────────────────────────────────────────────
+
 
 def test_build_ingest_batches_splits_correctly():
     events = [_event() for _ in range(12)]

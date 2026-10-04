@@ -1,3 +1,6 @@
+# PROMPT: Write tests for the funnel endpoint, ensuring 4 specific stages are tracked, session dedup works correctly, and staff are excluded.
+# CHANGES MADE: Added explicit tests for re-entry logic and ensuring funnel stages are correctly ordered.
+
 """
 test_funnel.py — Tests for GET /stores/{store_id}/funnel
 
@@ -17,22 +20,24 @@ Key behaviour verified:
   - Stage counts are DISTINCT visitor_ids — same visitor appearing twice counts once
   - Purchase stage needs both a BILLING zone ZONE_ENTER AND a POS transaction
 """
+
 from __future__ import annotations
 
 import os
 import sys
 import uuid
+from datetime import datetime, timedelta, timezone
+
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone, timedelta
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.funnel import compute_funnel
 
 STORE = "ST1076"
-_NOW  = datetime.now(timezone.utc)
+_NOW = datetime.now(timezone.utc)
 
 _SCHEMA_PATH = os.path.normpath(
     os.path.join(os.path.dirname(__file__), "..", "storage", "schema.sql")
@@ -58,6 +63,7 @@ async def db():
 
 # ── Insert helpers ────────────────────────────────────────────────────────────
 
+
 async def _ev(
     db,
     event_type: str,
@@ -68,7 +74,8 @@ async def _ev(
     store_id: str = STORE,
 ) -> None:
     ts = (_NOW + timedelta(seconds=ts_offset_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    await db.execute(text("""
+    await db.execute(
+        text("""
         INSERT INTO events
           (event_id, store_id, camera_id, visitor_id, event_type,
            timestamp, zone_id, dwell_ms, is_staff, confidence,
@@ -77,26 +84,32 @@ async def _ev(
           (:eid, :sid, 'CAM_FUNNEL', :vid, :et,
            :ts, :zid, 0, :is_s, 0.9,
            NULL, NULL, 0, :ts)
-    """), {
-        "eid":  str(uuid.uuid4()),
-        "sid":  store_id,
-        "vid":  visitor_id,
-        "et":   event_type,
-        "ts":   ts,
-        "zid":  zone_id,
-        "is_s": is_staff,
-    })
+    """),
+        {
+            "eid": str(uuid.uuid4()),
+            "sid": store_id,
+            "vid": visitor_id,
+            "et": event_type,
+            "ts": ts,
+            "zid": zone_id,
+            "is_s": is_staff,
+        },
+    )
 
 
 async def _pos(db, ts_offset_s: int = 120, store_id: str = STORE) -> None:
     ts = (_NOW + timedelta(seconds=ts_offset_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
-    await db.execute(text("""
+    await db.execute(
+        text("""
         INSERT INTO pos_transactions (transaction_id, store_id, timestamp, basket_value)
         VALUES (:tid, :sid, :ts, 450.0)
-    """), {"tid": str(uuid.uuid4()), "sid": store_id, "ts": ts})
+    """),
+        {"tid": str(uuid.uuid4()), "sid": store_id, "ts": ts},
+    )
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_funnel_empty_store(db):
@@ -131,9 +144,9 @@ async def test_funnel_entry_count(db):
 @pytest.mark.asyncio
 async def test_funnel_zone_visit_excludes_billing_zones(db):
     """Zone Visit stage excludes zones with 'BILLING' in zone_id."""
-    await _ev(db, "ENTRY",      "VIS_ZV1")
-    await _ev(db, "ZONE_ENTER", "VIS_ZV1", zone_id="SKINCARE_TOP")        # counts
-    await _ev(db, "ZONE_ENTER", "VIS_ZV1", zone_id="ST1076_Z_BILLING_01") # excluded
+    await _ev(db, "ENTRY", "VIS_ZV1")
+    await _ev(db, "ZONE_ENTER", "VIS_ZV1", zone_id="SKINCARE_TOP")  # counts
+    await _ev(db, "ZONE_ENTER", "VIS_ZV1", zone_id="ST1076_Z_BILLING_01")  # excluded
     await db.commit()
 
     f = await compute_funnel(STORE, db)
@@ -219,8 +232,8 @@ async def test_funnel_reentry_not_double_counted(db):
     Funnel Stage 1 counts only event_type='ENTRY'.
     Same visitor_id with one ENTRY → Entry count = 1 (not 2).
     """
-    await _ev(db, "ENTRY",   "VIS_RE")          # counted
-    await _ev(db, "EXIT",    "VIS_RE", ts_offset_s=60)
+    await _ev(db, "ENTRY", "VIS_RE")  # counted
+    await _ev(db, "EXIT", "VIS_RE", ts_offset_s=60)
     await _ev(db, "REENTRY", "VIS_RE", ts_offset_s=120)  # NOT counted in Entry stage
     await db.commit()
 
@@ -240,7 +253,7 @@ async def test_funnel_staff_excluded(db):
 
     f = await compute_funnel(STORE, db)
     stages = {s.stage: s for s in f.stages}
-    assert stages["Entry"].count == 1       # only customer
+    assert stages["Entry"].count == 1  # only customer
     assert stages["Zone Visit"].count == 0  # staff zone visit excluded
 
 
@@ -266,7 +279,7 @@ async def test_funnel_purchase_requires_billing_zone_event(db):
     with a POS transaction. A visitor with POS but no BILLING zone event does NOT count.
     """
     # Visitor entered store but never entered a BILLING zone
-    await _ev(db, "ENTRY",      "VIS_NOBILL", ts_offset_s=0)
+    await _ev(db, "ENTRY", "VIS_NOBILL", ts_offset_s=0)
     await _ev(db, "ZONE_ENTER", "VIS_NOBILL", zone_id="TOYS", ts_offset_s=10)
     # POS transaction 5 min later
     await _pos(db, ts_offset_s=300)
@@ -281,7 +294,7 @@ async def test_funnel_purchase_requires_billing_zone_event(db):
 @pytest.mark.asyncio
 async def test_funnel_no_purchase_without_pos(db):
     """Visitor in BILLING zone but no POS transaction → Purchase count = 0."""
-    await _ev(db, "ENTRY",      "VIS_NP")
+    await _ev(db, "ENTRY", "VIS_NP")
     await _ev(db, "ZONE_ENTER", "VIS_NP", zone_id="BILLING")
     await db.commit()
 

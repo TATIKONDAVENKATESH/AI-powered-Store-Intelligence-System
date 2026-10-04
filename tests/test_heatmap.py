@@ -1,3 +1,6 @@
+# PROMPT: Generate tests for the heatmap endpoint, ensuring dwell time normalization 0-100 works and data_confidence flags <20 sessions properly.
+# CHANGES MADE: Added scenarios for empty datasets and verified the normalization math.
+
 """
 test_heatmap.py — Tests for GET /stores/{store_id}/heatmap
 
@@ -17,16 +20,17 @@ Key correctness checks:
   - data_confidence threshold is exactly 20 (< 20 → False)
   - Zone with zero visits not included (only zones that have events)
 """
+
 from __future__ import annotations
 
 import os
 import sys
 import uuid
+
 import pytest
 import pytest_asyncio
-from datetime import datetime, timezone
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 from app.heatmap import compute_heatmap
@@ -56,6 +60,7 @@ async def db():
 
 # ── Insert helper ─────────────────────────────────────────────────────────────
 
+
 async def _ev(
     db,
     event_type: str,
@@ -66,7 +71,8 @@ async def _ev(
     sku_zone: str = None,
     store_id: str = STORE,
 ) -> None:
-    await db.execute(text("""
+    await db.execute(
+        text("""
         INSERT INTO events
           (event_id, store_id, camera_id, visitor_id, event_type,
            timestamp, zone_id, dwell_ms, is_staff, confidence,
@@ -75,19 +81,22 @@ async def _ev(
           (:eid, :sid, 'CAM_HM', :vid, :et,
            '2026-04-10T10:00:00Z', :zid, :dwell, :is_s, 0.9,
            NULL, :sku, 0, '2026-04-10T10:00:00Z')
-    """), {
-        "eid":   str(uuid.uuid4()),
-        "sid":   store_id,
-        "vid":   visitor_id,
-        "et":    event_type,
-        "zid":   zone_id,
-        "dwell": dwell_ms,
-        "is_s":  is_staff,
-        "sku":   sku_zone,
-    })
+    """),
+        {
+            "eid": str(uuid.uuid4()),
+            "sid": store_id,
+            "vid": visitor_id,
+            "et": event_type,
+            "zid": zone_id,
+            "dwell": dwell_ms,
+            "is_s": is_staff,
+            "sku": sku_zone,
+        },
+    )
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_heatmap_empty_store(db):
@@ -183,7 +192,7 @@ async def test_heatmap_sorted_by_score_descending(db):
 @pytest.mark.asyncio
 async def test_heatmap_staff_excluded(db):
     """Staff events (is_staff=1) must not appear in zone frequency count."""
-    await _ev(db, "ZONE_ENTER", "VIS_CUST",  zone_id="ZONE_X", is_staff=0)
+    await _ev(db, "ZONE_ENTER", "VIS_CUST", zone_id="ZONE_X", is_staff=0)
     await _ev(db, "ZONE_ENTER", "VIS_STAFF", zone_id="ZONE_X", is_staff=1)
     await db.commit()
 
@@ -226,7 +235,9 @@ async def test_heatmap_same_visitor_counted_once(db):
 @pytest.mark.asyncio
 async def test_heatmap_sku_zone_preserved(db):
     """sku_zone from the event must appear in the HeatmapZone response."""
-    await _ev(db, "ZONE_ENTER", "VIS_SKU", zone_id="LIPSTICK_CENTER", sku_zone="LIPSTICK")
+    await _ev(
+        db, "ZONE_ENTER", "VIS_SKU", zone_id="LIPSTICK_CENTER", sku_zone="LIPSTICK"
+    )
     await db.commit()
 
     h = await compute_heatmap(STORE, db)
@@ -247,7 +258,8 @@ async def test_heatmap_store_isolation(db):
 @pytest.mark.asyncio
 async def test_heatmap_zone_without_null_zone_id_excluded(db):
     """Events with zone_id=NULL must not appear in heatmap."""
-    await db.execute(text("""
+    await db.execute(
+        text("""
         INSERT INTO events
           (event_id, store_id, camera_id, visitor_id, event_type,
            timestamp, zone_id, dwell_ms, is_staff, confidence,
@@ -256,7 +268,9 @@ async def test_heatmap_zone_without_null_zone_id_excluded(db):
           (:eid, :sid, 'CAM_HM', 'VIS_NULL_ZONE', 'ZONE_ENTER',
            '2026-04-10T10:00:00Z', NULL, 0, 0, 0.9,
            NULL, NULL, 0, '2026-04-10T10:00:00Z')
-    """), {"eid": str(uuid.uuid4()), "sid": STORE})
+    """),
+        {"eid": str(uuid.uuid4()), "sid": STORE},
+    )
     await db.commit()
 
     h = await compute_heatmap(STORE, db)
@@ -264,6 +278,7 @@ async def test_heatmap_zone_without_null_zone_id_excluded(db):
 
 
 # ── HTTP endpoint tests (via conftest client) ──────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_heatmap_endpoint_empty(client):
@@ -280,7 +295,8 @@ async def test_heatmap_endpoint_empty(client):
 async def test_heatmap_endpoint_with_data(client, db_session):
     """Smoke test: ingest zone events and verify heatmap endpoint response structure."""
     for i in range(3):
-        await db_session.execute(text("""
+        await db_session.execute(
+            text("""
             INSERT INTO events
               (event_id, store_id, camera_id, visitor_id, event_type,
                timestamp, zone_id, dwell_ms, is_staff, confidence,
@@ -289,7 +305,9 @@ async def test_heatmap_endpoint_with_data(client, db_session):
               (:eid, 'ST1076', 'CAM_TEST', :vid, 'ZONE_ENTER',
                '2026-04-10T10:00:00Z', 'SKINCARE_TOP', 5000, 0, 0.9,
                NULL, 'SKINCARE', 0, '2026-04-10T10:00:00Z')
-        """), {"eid": str(uuid.uuid4()), "vid": f"VIS_HT{i}"})
+        """),
+            {"eid": str(uuid.uuid4()), "vid": f"VIS_HT{i}"},
+        )
     await db_session.commit()
 
     resp = await client.get("/stores/ST1076/heatmap")
@@ -302,6 +320,12 @@ async def test_heatmap_endpoint_with_data(client, db_session):
     assert z["normalised_score"] == 100.0
     assert z["data_confidence"] is False
     # Zone fields all present
-    for field in ["zone_id", "sku_zone", "visit_frequency",
-                  "avg_dwell_seconds", "normalised_score", "data_confidence"]:
+    for field in [
+        "zone_id",
+        "sku_zone",
+        "visit_frequency",
+        "avg_dwell_seconds",
+        "normalised_score",
+        "data_confidence",
+    ]:
         assert field in z

@@ -1,13 +1,18 @@
 from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models import HeatmapResponse, HeatmapZone
 
 logger = logging.getLogger(__name__)
 
-MIN_SESSIONS_FOR_CONFIDENCE = 20  # data_confidence=False if fewer than 20 unique visitors
+MIN_SESSIONS_FOR_CONFIDENCE = (
+    20  # data_confidence=False if fewer than 20 unique visitors
+)
 
 
 async def compute_heatmap(store_id: str, db: AsyncSession) -> HeatmapResponse:
@@ -41,14 +46,16 @@ async def compute_heatmap(store_id: str, db: AsyncSession) -> HeatmapResponse:
     for row in rows:
         zone_id, sku_zone, freq, avg_dwell = row
         normalised = round((freq / max_freq) * 100, 2)
-        zones.append(HeatmapZone(
-            zone_id=zone_id,
-            sku_zone=sku_zone,
-            visit_frequency=freq,
-            avg_dwell_seconds=round(avg_dwell or 0.0, 2),
-            normalised_score=normalised,
-            data_confidence=(freq >= MIN_SESSIONS_FOR_CONFIDENCE),
-        ))
+        zones.append(
+            HeatmapZone(
+                zone_id=zone_id,
+                sku_zone=sku_zone,
+                visit_frequency=freq,
+                avg_dwell_seconds=round(avg_dwell or 0.0, 2),
+                normalised_score=normalised,
+                data_confidence=(freq >= MIN_SESSIONS_FOR_CONFIDENCE),
+            )
+        )
 
     zones.sort(key=lambda z: z.normalised_score, reverse=True)
 

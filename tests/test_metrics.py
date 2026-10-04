@@ -1,3 +1,6 @@
+# PROMPT: Generate comprehensive tests for the metrics endpoint. Include unique visitors, conversion rate, dwell per zone, queue depth, and abandonment.
+# CHANGES MADE: Updated POS correlation time windows to 300 seconds and handled zero-transaction edge cases.
+
 """
 test_metrics.py — Tests for GET /stores/{store_id}/metrics
 
@@ -17,19 +20,20 @@ Key production behaviour:
   - queue_depth excludes visitors who later EXIT or BILLING_QUEUE_ABANDON
   - All visitor-counting queries use is_staff = 0
 """
+
 from __future__ import annotations
 
 import uuid
+from datetime import datetime, timezone
+from unittest.mock import AsyncMock
+
 import pytest
-from datetime import datetime, timezone, timedelta
 from sqlalchemy import text
 
-from unittest.mock import AsyncMock, Mock
 from app.metrics import compute_metrics
 
-
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 def _ev(
     store_id: str,
@@ -44,18 +48,18 @@ def _ev(
 ) -> dict:
     """Build a complete event row dict for direct DB insertion."""
     return {
-        "event_id":    str(uuid.uuid4()),
-        "store_id":    store_id,
-        "camera_id":   camera_id,
-        "visitor_id":  visitor_id,
-        "event_type":  event_type,
-        "timestamp":   timestamp or "2026-04-10T07:00:00+00:00",
-        "zone_id":     zone_id,
-        "dwell_ms":    dwell_ms,
-        "is_staff":    is_staff,
-        "confidence":  0.9,
+        "event_id": str(uuid.uuid4()),
+        "store_id": store_id,
+        "camera_id": camera_id,
+        "visitor_id": visitor_id,
+        "event_type": event_type,
+        "timestamp": timestamp or "2026-04-10T07:00:00+00:00",
+        "zone_id": zone_id,
+        "dwell_ms": dwell_ms,
+        "is_staff": is_staff,
+        "confidence": 0.9,
         "queue_depth": None,
-        "sku_zone":    sku_zone,
+        "sku_zone": sku_zone,
         "session_seq": 0,
         "ingested_at": datetime.now(timezone.utc).isoformat(),
     }
@@ -63,7 +67,8 @@ def _ev(
 
 async def _insert(db, rows: list[dict]) -> None:
     for row in rows:
-        await db.execute(text("""
+        await db.execute(
+            text("""
             INSERT OR IGNORE INTO events
               (event_id, store_id, camera_id, visitor_id, event_type, timestamp,
                zone_id, dwell_ms, is_staff, confidence, queue_depth, sku_zone,
@@ -72,24 +77,32 @@ async def _insert(db, rows: list[dict]) -> None:
               (:event_id, :store_id, :camera_id, :visitor_id, :event_type, :timestamp,
                :zone_id, :dwell_ms, :is_staff, :confidence, :queue_depth, :sku_zone,
                :session_seq, :ingested_at)
-        """), row)
+        """),
+            row,
+        )
     await db.commit()
 
 
-async def _insert_pos(db, store_id: str, timestamp: str, basket_value: float = 500.0) -> None:
-    await db.execute(text("""
+async def _insert_pos(
+    db, store_id: str, timestamp: str, basket_value: float = 500.0
+) -> None:
+    await db.execute(
+        text("""
         INSERT OR IGNORE INTO pos_transactions (transaction_id, store_id, timestamp, basket_value)
         VALUES (:tid, :sid, :ts, :bv)
-    """), {
-        "tid": str(uuid.uuid4()),
-        "sid": store_id,
-        "ts":  timestamp,
-        "bv":  basket_value,
-    })
+    """),
+        {
+            "tid": str(uuid.uuid4()),
+            "sid": store_id,
+            "ts": timestamp,
+            "bv": basket_value,
+        },
+    )
     await db.commit()
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_metrics_zero_visitors(client):
@@ -111,9 +124,14 @@ async def test_metrics_response_schema(client):
     resp = await client.get("/stores/ST1076/metrics")
     body = resp.json()
     for field in [
-        "store_id", "unique_visitors", "conversion_rate",
-        "avg_dwell_per_zone", "queue_depth", "abandonment_rate",
-        "total_transactions", "computed_at",
+        "store_id",
+        "unique_visitors",
+        "conversion_rate",
+        "avg_dwell_per_zone",
+        "queue_depth",
+        "abandonment_rate",
+        "total_transactions",
+        "computed_at",
     ]:
         assert field in body, f"Missing field: {field}"
     assert body["store_id"] == "ST1076"
@@ -136,9 +154,9 @@ async def test_metrics_unique_visitors_count(client, db_session):
 async def test_metrics_deduplication_same_visitor(client, db_session):
     """Same visitor_id appearing multiple times counts as 1 unique visitor."""
     rows = [
-        _ev("ST1076", "ENTRY",      "VIS_DUP"),
+        _ev("ST1076", "ENTRY", "VIS_DUP"),
         _ev("ST1076", "ZONE_ENTER", "VIS_DUP", zone_id="Z01"),
-        _ev("ST1076", "EXIT",       "VIS_DUP"),
+        _ev("ST1076", "EXIT", "VIS_DUP"),
     ]
     await _insert(db_session, rows)
     resp = await client.get("/stores/ST1076/metrics")
@@ -149,8 +167,8 @@ async def test_metrics_deduplication_same_visitor(client, db_session):
 async def test_metrics_staff_excluded_from_unique_visitors(client, db_session):
     """Staff events (is_staff=1) must NOT appear in unique_visitors count."""
     rows = [
-        _ev("ST1076", "ENTRY", "VIS_CUST_A",  is_staff=0),
-        _ev("ST1076", "ENTRY", "VIS_CUST_B",  is_staff=0),
+        _ev("ST1076", "ENTRY", "VIS_CUST_A", is_staff=0),
+        _ev("ST1076", "ENTRY", "VIS_CUST_B", is_staff=0),
         _ev("ST1076", "ENTRY", "VIS_STAFF_1", is_staff=1),
         _ev("ST1076", "ENTRY", "VIS_STAFF_2", is_staff=1),
     ]
@@ -170,11 +188,11 @@ async def test_metrics_queue_depth_join_minus_exit(client, db_session):
     Expected queue_depth = 1.
     """
     rows = [
-        _ev("ST1076", "BILLING_QUEUE_JOIN",    "VIS_Q1", zone_id="ST1076_Z_BILLING_01"),
-        _ev("ST1076", "EXIT",                  "VIS_Q1"),
-        _ev("ST1076", "BILLING_QUEUE_JOIN",    "VIS_Q2", zone_id="ST1076_Z_BILLING_01"),
+        _ev("ST1076", "BILLING_QUEUE_JOIN", "VIS_Q1", zone_id="ST1076_Z_BILLING_01"),
+        _ev("ST1076", "EXIT", "VIS_Q1"),
+        _ev("ST1076", "BILLING_QUEUE_JOIN", "VIS_Q2", zone_id="ST1076_Z_BILLING_01"),
         _ev("ST1076", "BILLING_QUEUE_ABANDON", "VIS_Q2", zone_id="ST1076_Z_BILLING_01"),
-        _ev("ST1076", "BILLING_QUEUE_JOIN",    "VIS_Q3", zone_id="ST1076_Z_BILLING_01"),
+        _ev("ST1076", "BILLING_QUEUE_JOIN", "VIS_Q3", zone_id="ST1076_Z_BILLING_01"),
     ]
     await _insert(db_session, rows)
     resp = await client.get("/stores/ST1076/metrics")
@@ -199,10 +217,10 @@ async def test_metrics_abandonment_rate(client, db_session):
     4 joined, 2 abandoned → abandonment_rate = 2/4 = 0.5.
     """
     rows = [
-        _ev("ST1076", "BILLING_QUEUE_JOIN",    "VIS_A1", zone_id="BILLING"),
-        _ev("ST1076", "BILLING_QUEUE_JOIN",    "VIS_A2", zone_id="BILLING"),
-        _ev("ST1076", "BILLING_QUEUE_JOIN",    "VIS_A3", zone_id="BILLING"),
-        _ev("ST1076", "BILLING_QUEUE_JOIN",    "VIS_A4", zone_id="BILLING"),
+        _ev("ST1076", "BILLING_QUEUE_JOIN", "VIS_A1", zone_id="BILLING"),
+        _ev("ST1076", "BILLING_QUEUE_JOIN", "VIS_A2", zone_id="BILLING"),
+        _ev("ST1076", "BILLING_QUEUE_JOIN", "VIS_A3", zone_id="BILLING"),
+        _ev("ST1076", "BILLING_QUEUE_JOIN", "VIS_A4", zone_id="BILLING"),
         _ev("ST1076", "BILLING_QUEUE_ABANDON", "VIS_A1", zone_id="BILLING"),
         _ev("ST1076", "BILLING_QUEUE_ABANDON", "VIS_A2", zone_id="BILLING"),
     ]
@@ -219,14 +237,20 @@ async def test_metrics_conversion_rate_with_pos(client, db_session):
     3 visitors, 1 in BILLING zone + POS match → conversion_rate = 1/3.
     """
     event_ts = "2026-04-10T10:00:00+00:00"
-    pos_ts   = "2026-04-10T10:05:00+00:00"   # 5 min after → within 1800s
+    pos_ts = "2026-04-10T10:05:00+00:00"  # 5 min after → within 1800s
 
     rows = [
-        _ev("ST1076", "ENTRY",      "VIS_C1", timestamp=event_ts),
-        _ev("ST1076", "ENTRY",      "VIS_C2", timestamp=event_ts),
-        _ev("ST1076", "ENTRY",      "VIS_C3", timestamp=event_ts),
+        _ev("ST1076", "ENTRY", "VIS_C1", timestamp=event_ts),
+        _ev("ST1076", "ENTRY", "VIS_C2", timestamp=event_ts),
+        _ev("ST1076", "ENTRY", "VIS_C3", timestamp=event_ts),
         # Only VIS_C1 enters BILLING zone
-        _ev("ST1076", "ZONE_ENTER", "VIS_C1", zone_id="ST1076_Z_BILLING_01", timestamp=event_ts),
+        _ev(
+            "ST1076",
+            "ZONE_ENTER",
+            "VIS_C1",
+            zone_id="ST1076_Z_BILLING_01",
+            timestamp=event_ts,
+        ),
     ]
     await _insert(db_session, rows)
     await _insert_pos(db_session, "ST1076", pos_ts)
@@ -235,7 +259,7 @@ async def test_metrics_conversion_rate_with_pos(client, db_session):
     body = resp.json()
     rate = body["conversion_rate"]
     # 1 converted out of 3 visitors
-    assert abs(rate - round(1/3, 4)) < 0.001
+    assert abs(rate - round(1 / 3, 4)) < 0.001
 
 
 @pytest.mark.asyncio
@@ -300,6 +324,7 @@ async def test_metrics_unknown_store_returns_zeros(client):
     assert body["unique_visitors"] == 0
     assert body["conversion_rate"] == 0.0
 
+
 class FakeResult:
     def __init__(self, scalar_value=None, rows=None, row=None):
         self._scalar = scalar_value
@@ -321,12 +346,12 @@ async def test_compute_metrics_all_zero():
     db = AsyncMock()
 
     db.execute.side_effect = [
-        FakeResult(scalar_value=0),      # visitors
-        FakeResult(scalar_value=0),      # transactions
-        FakeResult(scalar_value=0),      # converted
-        FakeResult(rows=[]),             # dwell
-        FakeResult(scalar_value=0),      # queue
-        FakeResult(row=(0, 0)),          # abandon
+        FakeResult(scalar_value=0),  # visitors
+        FakeResult(scalar_value=0),  # transactions
+        FakeResult(scalar_value=0),  # converted
+        FakeResult(rows=[]),  # dwell
+        FakeResult(scalar_value=0),  # queue
+        FakeResult(row=(0, 0)),  # abandon
     ]
 
     result = await compute_metrics("STORE1", db)
@@ -344,17 +369,17 @@ async def test_compute_metrics_full_values():
     db = AsyncMock()
 
     db.execute.side_effect = [
-        FakeResult(scalar_value=10),      # visitors
-        FakeResult(scalar_value=5),       # transactions
-        FakeResult(scalar_value=4),       # converted
+        FakeResult(scalar_value=10),  # visitors
+        FakeResult(scalar_value=5),  # transactions
+        FakeResult(scalar_value=4),  # converted
         FakeResult(
             rows=[
                 ("ZONE_A", 12.345, 7),
                 ("ZONE_B", 5.5, 2),
             ]
         ),
-        FakeResult(scalar_value=3),       # queue
-        FakeResult(row=(8, 2)),           # joined, abandoned
+        FakeResult(scalar_value=3),  # queue
+        FakeResult(row=(8, 2)),  # joined, abandoned
     ]
 
     result = await compute_metrics("STORE1", db)
@@ -379,12 +404,12 @@ async def test_compute_metrics_joined_without_abandonment():
     db = AsyncMock()
 
     db.execute.side_effect = [
-        FakeResult(scalar_value=2),      # visitors
-        FakeResult(scalar_value=1),      # transactions
-        FakeResult(scalar_value=1),      # converted
+        FakeResult(scalar_value=2),  # visitors
+        FakeResult(scalar_value=1),  # transactions
+        FakeResult(scalar_value=1),  # converted
         FakeResult(rows=[]),
         FakeResult(scalar_value=1),
-        FakeResult(row=(5, 0)),          # joined, abandoned
+        FakeResult(row=(5, 0)),  # joined, abandoned
     ]
 
     result = await compute_metrics("STORE1", db)

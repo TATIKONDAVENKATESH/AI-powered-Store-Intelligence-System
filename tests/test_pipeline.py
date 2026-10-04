@@ -1,3 +1,6 @@
+# PROMPT: Write tests for the detection pipeline components: tracking, ReID, event emitter, and bounding box intersection logic.
+# CHANGES MADE: Handled YOLO confidence passthrough and boundary crossing edge cases in ReID.
+
 """
 test_pipeline.py — Tests for Pydantic models, EventEmitter, and ReIDTracker
 
@@ -11,43 +14,54 @@ Covers:
 
 No YOLO, OpenCV, GPU, or network required.
 """
+
 from __future__ import annotations
 
 import json
 import os
 import sys
 import uuid
-import time
-import pytest
 from datetime import datetime, timezone
+
+import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from pydantic import ValidationError
-from app.models import StoreEvent, EventMetadata, IngestRequest
 
+from app.models import IngestRequest, StoreEvent
 
 # ── StoreEvent model tests ────────────────────────────────────────────────────
+
 
 def _base_event(**overrides) -> dict:
     """Valid minimal event dict."""
     base = {
-        "event_id":   str(uuid.uuid4()),
-        "store_id":   "ST1076",
-        "camera_id":  "CAM3",
+        "event_id": str(uuid.uuid4()),
+        "store_id": "ST1076",
+        "camera_id": "CAM3",
         "visitor_id": "VIS_0001",
         "event_type": "ENTRY",
-        "timestamp":  "2026-03-08T13:00:00Z",
+        "timestamp": "2026-03-08T13:00:00Z",
         "confidence": 0.85,
     }
     base.update(overrides)
     return base
 
 
-@pytest.mark.parametrize("event_type", [
-    "ENTRY", "EXIT", "ZONE_ENTER", "ZONE_EXIT",
-    "ZONE_DWELL", "BILLING_QUEUE_JOIN", "BILLING_QUEUE_ABANDON", "REENTRY",
-])
+@pytest.mark.parametrize(
+    "event_type",
+    [
+        "ENTRY",
+        "EXIT",
+        "ZONE_ENTER",
+        "ZONE_EXIT",
+        "ZONE_DWELL",
+        "BILLING_QUEUE_JOIN",
+        "BILLING_QUEUE_ABANDON",
+        "REENTRY",
+    ],
+)
 def test_all_eight_event_types_accepted(event_type):
     """All 8 event types in the spec must be accepted by the model."""
     ev = StoreEvent(**_base_event(event_type=event_type))
@@ -117,11 +131,13 @@ def test_zone_event_with_zone_id():
 
 
 def test_billing_queue_with_metadata():
-    ev = StoreEvent(**_base_event(
-        event_type="BILLING_QUEUE_JOIN",
-        zone_id="ST1076_Z_BILLING_01",
-        metadata={"queue_depth": 5, "sku_zone": None, "session_seq": 3},
-    ))
+    ev = StoreEvent(
+        **_base_event(
+            event_type="BILLING_QUEUE_JOIN",
+            zone_id="ST1076_Z_BILLING_01",
+            metadata={"queue_depth": 5, "sku_zone": None, "session_seq": 3},
+        )
+    )
     assert ev.metadata.queue_depth == 5
     assert ev.metadata.session_seq == 3
 
@@ -151,6 +167,7 @@ def test_timestamp_with_offset_accepted():
 
 # ── IngestRequest batch limit ─────────────────────────────────────────────────
 
+
 def test_ingest_request_over_500_events_rejected():
     """IngestRequest must reject batches larger than 500 events."""
     events = [StoreEvent(**_base_event(event_id=str(uuid.uuid4()))) for _ in range(501)]
@@ -172,8 +189,10 @@ def test_ingest_request_empty_accepted():
 
 # ── EventEmitter tests ─────────────────────────────────────────────────────────
 
+
 def test_event_emitter_buffer_and_count():
     from pipeline.emit import EventEmitter
+
     emitter = EventEmitter("CAM_TEST")
     assert emitter.count() == 0
     ev = {"event_id": str(uuid.uuid4()), "event_type": "ENTRY"}
@@ -184,6 +203,7 @@ def test_event_emitter_buffer_and_count():
 
 def test_event_emitter_flush_writes_jsonl(tmp_path):
     from pipeline.emit import EventEmitter
+
     emitter = EventEmitter("CAM_FLUSH")
     ev1 = {"event_id": str(uuid.uuid4()), "event_type": "ENTRY"}
     ev2 = {"event_id": str(uuid.uuid4()), "event_type": "EXIT"}
@@ -200,6 +220,7 @@ def test_event_emitter_flush_writes_jsonl(tmp_path):
 
 def test_event_emitter_flush_empty(tmp_path):
     from pipeline.emit import EventEmitter
+
     emitter = EventEmitter("CAM_EMPTY")
     out = str(tmp_path / "empty.jsonl")
     emitter.flush(output_path=out)
@@ -208,16 +229,18 @@ def test_event_emitter_flush_empty(tmp_path):
 
 # ── build_event tests ─────────────────────────────────────────────────────────
 
+
 def test_build_event_timestamp_from_frame():
     """build_event converts frame index to correct ISO-8601 UTC timestamp."""
     from pipeline.emit import build_event
+
     clip_start = datetime(2026, 3, 8, 13, 0, 0, tzinfo=timezone.utc)
     ev = build_event(
         store_id="ST1076",
         camera_id="CAM3",
         visitor_id="VIS_0001",
         event_type="ENTRY",
-        frame_idx=30,    # 30 frames at 15 fps = 2 seconds
+        frame_idx=30,  # 30 frames at 15 fps = 2 seconds
         fps=15.0,
         clip_start_utc=clip_start,
     )
@@ -229,6 +252,7 @@ def test_build_event_timestamp_from_frame():
 def test_build_event_has_all_required_fields():
     """build_event must produce a dict with all fields matching the API schema."""
     from pipeline.emit import build_event
+
     clip_start = datetime(2026, 4, 10, 6, 30, 0, tzinfo=timezone.utc)
     ev = build_event(
         store_id="ST1008",
@@ -246,8 +270,19 @@ def test_build_event_has_all_required_fields():
         sku_zone="SKINCARE",
         session_seq=1,
     )
-    required = ["event_id", "store_id", "camera_id", "visitor_id", "event_type",
-                "timestamp", "zone_id", "dwell_ms", "is_staff", "confidence", "metadata"]
+    required = [
+        "event_id",
+        "store_id",
+        "camera_id",
+        "visitor_id",
+        "event_type",
+        "timestamp",
+        "zone_id",
+        "dwell_ms",
+        "is_staff",
+        "confidence",
+        "metadata",
+    ]
     for field in required:
         assert field in ev, f"Missing field: {field}"
     assert ev["metadata"]["sku_zone"] == "SKINCARE"
@@ -257,6 +292,7 @@ def test_build_event_has_all_required_fields():
 def test_build_event_uuid_is_unique():
     """Each call to build_event must produce a distinct event_id."""
     from pipeline.emit import build_event
+
     clip_start = datetime(2026, 1, 1, tzinfo=timezone.utc)
     e1 = build_event("ST1076", "CAM3", "V1", "ENTRY", 0, 15.0, clip_start)
     e2 = build_event("ST1076", "CAM3", "V1", "ENTRY", 0, 15.0, clip_start)
@@ -265,12 +301,13 @@ def test_build_event_uuid_is_unique():
 
 # ── load_jsonl tests ───────────────────────────────────────────────────────────
 
+
 def test_load_jsonl_valid_file(tmp_path):
     from pipeline.emit import load_jsonl
+
     f = tmp_path / "events.jsonl"
     f.write_text(
-        '{"event_id":"1","event_type":"ENTRY"}\n'
-        '{"event_id":"2","event_type":"EXIT"}\n'
+        '{"event_id":"1","event_type":"ENTRY"}\n{"event_id":"2","event_type":"EXIT"}\n'
     )
     events = load_jsonl(str(f))
     assert len(events) == 2
@@ -279,12 +316,14 @@ def test_load_jsonl_valid_file(tmp_path):
 
 def test_load_jsonl_missing_file_returns_empty():
     from pipeline.emit import load_jsonl
+
     events = load_jsonl("/nonexistent/path/events.jsonl")
     assert events == []
 
 
 def test_load_jsonl_skips_malformed_lines(tmp_path):
     from pipeline.emit import load_jsonl
+
     f = tmp_path / "bad.jsonl"
     f.write_text('{"event_id":"1"}\nNOT_JSON\n{"event_id":"3"}\n')
     events = load_jsonl(str(f))
@@ -293,8 +332,10 @@ def test_load_jsonl_skips_malformed_lines(tmp_path):
 
 # ── ReIDTracker tests ─────────────────────────────────────────────────────────
 
+
 def test_reid_new_track_gets_new_visitor_id():
     from pipeline.tracker import ReIDTracker
+
     reid = ReIDTracker()
     vid, is_reentry = reid.get_visitor_id(track_id=1, centroid=(100.0, 200.0))
     assert vid.startswith("VIS_")
@@ -303,6 +344,7 @@ def test_reid_new_track_gets_new_visitor_id():
 
 def test_reid_same_track_same_visitor_id():
     from pipeline.tracker import ReIDTracker
+
     reid = ReIDTracker()
     vid1, _ = reid.get_visitor_id(1, (100.0, 200.0))
     vid2, _ = reid.get_visitor_id(1, (105.0, 205.0))
@@ -311,6 +353,7 @@ def test_reid_same_track_same_visitor_id():
 
 def test_reid_different_tracks_different_ids():
     from pipeline.tracker import ReIDTracker
+
     reid = ReIDTracker()
     vid1, _ = reid.get_visitor_id(1, (100.0, 200.0))
     vid2, _ = reid.get_visitor_id(2, (500.0, 500.0))  # far apart
@@ -323,6 +366,7 @@ def test_reid_reentry_detected_within_window():
     within REENTRY_WINDOW_S → re-entry detected, same visitor_id returned.
     """
     from pipeline.tracker import ReIDTracker
+
     reid = ReIDTracker()
     vid1, _ = reid.get_visitor_id(track_id=10, centroid=(100.0, 100.0))
     reid.mark_exit(track_id=10, centroid=(100.0, 100.0))
@@ -335,6 +379,7 @@ def test_reid_reentry_detected_within_window():
 def test_reid_no_reentry_when_far_away():
     """Track exits at (100, 100); new track at (1000, 1000) — too far → new visitor."""
     from pipeline.tracker import ReIDTracker
+
     reid = ReIDTracker()
     vid1, _ = reid.get_visitor_id(10, (100.0, 100.0))
     reid.mark_exit(10, (100.0, 100.0))
@@ -346,12 +391,14 @@ def test_reid_no_reentry_when_far_away():
 def test_reid_get_last_centroid_returns_none_for_unknown_track():
     """get_last_centroid must return None for a track that was never seen."""
     from pipeline.tracker import ReIDTracker
+
     reid = ReIDTracker()
     assert reid.get_last_centroid(track_id=9999) is None
 
 
 def test_reid_get_last_centroid_returns_most_recent():
     from pipeline.tracker import ReIDTracker
+
     reid = ReIDTracker()
     reid.get_visitor_id(5, (10.0, 20.0))
     reid.get_visitor_id(5, (15.0, 25.0))  # updates centroid
@@ -362,6 +409,7 @@ def test_reid_get_last_centroid_returns_most_recent():
 def test_reid_monotonic_visitor_ids():
     """Visitor IDs should be sequentially numbered."""
     from pipeline.tracker import ReIDTracker
+
     reid = ReIDTracker()
     v1, _ = reid.get_visitor_id(1, (0.0, 0.0))
     v2, _ = reid.get_visitor_id(2, (1000.0, 1000.0))
@@ -373,9 +421,11 @@ def test_reid_monotonic_visitor_ids():
 
 # ── merge_event_files tests ───────────────────────────────────────────────────
 
+
 def test_merge_event_files_chronological_sort(tmp_path, monkeypatch):
     """merge_event_files must produce events sorted by timestamp."""
     from pipeline import emit as emit_mod
+
     monkeypatch.setattr(emit_mod, "EVENTS_DIR", str(tmp_path))
 
     # Write two camera files with out-of-order timestamps
@@ -400,6 +450,7 @@ def test_merge_event_files_chronological_sort(tmp_path, monkeypatch):
 def test_merge_event_files_skips_output_file_itself(tmp_path, monkeypatch):
     """merge_event_files must not include the output file (all_events.jsonl) in the merge."""
     from pipeline import emit as emit_mod
+
     monkeypatch.setattr(emit_mod, "EVENTS_DIR", str(tmp_path))
 
     (tmp_path / "CAM_C_events.jsonl").write_text(

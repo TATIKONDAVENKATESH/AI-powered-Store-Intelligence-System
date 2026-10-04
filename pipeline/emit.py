@@ -1,17 +1,12 @@
 from __future__ import annotations
+
 """
 Event construction, JSONL buffering, and merge utilities.
-
-KEY FIX: EVENTS_DIR is resolved to an absolute path at module load time.
-Previously, when run.bat cd'd to the project root and ran `python pipeline\\detect.py`,
-the relative path `./data/generated_events` resolved correctly only if the CWD was the
-project root. Now we compute the canonical path once so it is correct regardless of CWD.
 """
 import json
-import uuid
 import os
-from datetime import datetime, timezone, timedelta
-from typing import Optional
+import uuid
+from datetime import datetime, timedelta
 
 # Resolve to absolute path once at import time to avoid CWD-dependent bugs
 _RAW_EVENTS_DIR = os.getenv("EVENTS_DIR", "./data/generated_events")
@@ -39,30 +34,30 @@ def build_event(
     frame_idx: int,
     fps: float,
     clip_start_utc: datetime,
-    zone_id: Optional[str] = None,
+    zone_id: str | None = None,
     dwell_ms: int = 0,
     is_staff: bool = False,
     confidence: float = 0.9,
-    queue_depth: Optional[int] = None,
-    sku_zone: Optional[str] = None,
+    queue_depth: int | None = None,
+    sku_zone: str | None = None,
     session_seq: int = 0,
 ) -> dict:
     """Build a structured event dict matching the challenge API schema exactly."""
     return {
-        "event_id":   str(uuid.uuid4()),   # globally unique UUID v4
-        "store_id":   store_id,
-        "camera_id":  camera_id,
+        "event_id": str(uuid.uuid4()),  # globally unique UUID v4
+        "store_id": store_id,
+        "camera_id": camera_id,
         "visitor_id": visitor_id,
         "event_type": event_type,
-        "timestamp":  _utc_iso(clip_start_utc, frame_idx, fps),  # ISO-8601 UTC
-        "zone_id":    zone_id,             # null for ENTRY/EXIT events
-        "dwell_ms":   dwell_ms,            # 0 for instantaneous events
-        "is_staff":   is_staff,            # your model must classify this
+        "timestamp": _utc_iso(clip_start_utc, frame_idx, fps),  # ISO-8601 UTC
+        "zone_id": zone_id,  # null for ENTRY/EXIT events
+        "dwell_ms": dwell_ms,  # 0 for instantaneous events
+        "is_staff": is_staff,  # your model must classify this
         "confidence": round(confidence, 4),
         "metadata": {
-            "queue_depth": queue_depth,    # integer for BILLING_QUEUE_JOIN, else null
-            "sku_zone":    sku_zone,       # zone label from store_layout.json
-            "session_seq": session_seq,    # ordinal position in visitor session
+            "queue_depth": queue_depth,  # integer for BILLING_QUEUE_JOIN, else null
+            "sku_zone": sku_zone,  # zone label from store_layout.json
+            "session_seq": session_seq,  # ordinal position in visitor session
         },
     }
 
@@ -78,19 +73,15 @@ class EventEmitter:
         """Append one event to the in-memory buffer."""
         self._events.append(event)
 
-    def flush(self, output_path: Optional[str] = None) -> str:
+    def flush(self, output_path: str | None = None) -> str:
         """
         Write all buffered events to JSONL.
-
-        FIX: os.makedirs is called here with the resolved absolute EVENTS_DIR,
-        so the directory is always created correctly regardless of CWD.
         """
         os.makedirs(EVENTS_DIR, exist_ok=True)
         if output_path is None:
             output_path = os.path.join(EVENTS_DIR, f"{self.camera_id}_events.jsonl")
         with open(output_path, "w", encoding="utf-8") as f:
-            for ev in self._events:
-                f.write(json.dumps(ev) + "\n")
+            f.writelines(json.dumps(ev) + "\n" for ev in self._events)
         return output_path
 
     def count(self) -> int:
@@ -139,8 +130,7 @@ def merge_event_files(output_path: str) -> int:
     all_events.sort(key=lambda e: e.get("timestamp", ""))
 
     with open(output_path, "w", encoding="utf-8") as f:
-        for ev in all_events:
-            f.write(json.dumps(ev) + "\n")
+        f.writelines(json.dumps(ev) + "\n" for ev in all_events)
 
     print(f"  merged {len(all_events)} events → {output_path}")
     return len(all_events)

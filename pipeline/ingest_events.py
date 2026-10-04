@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 """
 Reads all_events.jsonl (produced by detect.py + merge_event_files) and POSTs
 events in batches of 500 to the /events/ingest API endpoint.
@@ -12,19 +13,18 @@ Module-level names that tests monkeypatch:
 """
 import json
 import os
-import sys
-import urllib.request
 import urllib.error
+import urllib.request
 
-API_URL    = os.getenv("API_URL", "http://localhost:8000")
+API_URL = os.getenv("API_URL", "http://localhost:8000")
 EVENTS_DIR = os.getenv("EVENTS_DIR", "./data/generated_events")
 BATCH_SIZE = 500
-BATCH      = BATCH_SIZE   # alias so tests can monkeypatch ingest_mod.BATCH
+BATCH = BATCH_SIZE  # alias so tests can monkeypatch ingest_mod.BATCH
 
 # Resolve EVENTS_DIR to absolute path using the same logic as emit.py
 if not os.path.isabs(EVENTS_DIR):
     _project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    EVENTS_DIR    = os.path.normpath(os.path.join(_project_root, EVENTS_DIR))
+    EVENTS_DIR = os.path.normpath(os.path.join(_project_root, EVENTS_DIR))
 
 JSONL = os.path.join(EVENTS_DIR, "all_events.jsonl")  # tests monkeypatch this
 
@@ -59,7 +59,7 @@ def post_batch(events: list[dict], api_url: str) -> dict:
 def main() -> None:
     """Read all_events.jsonl and POST to API in batches of 500."""
     events_path = JSONL
-    batch_size  = BATCH
+    batch_size = BATCH
 
     if not os.path.exists(events_path):
         print(f"No events file at {events_path} — run detect.py and merge first")
@@ -75,10 +75,10 @@ def main() -> None:
 
     total_accepted = 0
     total_rejected = 0
-    total_dup      = 0
+    total_dup = 0
 
     for i in range(0, len(events), batch_size):
-        batch = events[i:i + batch_size]
+        batch = events[i : i + batch_size]
         try:
             result = post_batch(batch, API_URL)
             acc = result.get("accepted", 0)
@@ -86,15 +86,21 @@ def main() -> None:
             dup = result.get("duplicates", 0)
             total_accepted += acc
             total_rejected += rej
-            total_dup      += dup
-            print(f"Batch {i // batch_size + 1}: accepted={acc} rejected={rej} dup={dup}")
+            total_dup += dup
+            print(
+                f"Batch {i // batch_size + 1}: accepted={acc} rejected={rej} dup={dup}"
+            )
         except urllib.error.URLError as exc:
             print(f"[ERROR] Batch {i // batch_size + 1} failed: {exc}")
-            print("  Is the API running? Try: docker compose up  OR  uvicorn app.main:app")
+            print(
+                "  Is the API running? Try: docker compose up  OR  uvicorn app.main:app"
+            )
         except Exception as exc:
             print(f"[ERROR] Batch {i // batch_size + 1} unexpected error: {exc}")
 
-    print(f"Total accepted: {total_accepted} | rejected: {total_rejected} | duplicates: {total_dup}")
+    print(
+        f"Total accepted: {total_accepted} | rejected: {total_rejected} | duplicates: {total_dup}"
+    )
 
 
 if __name__ == "__main__":

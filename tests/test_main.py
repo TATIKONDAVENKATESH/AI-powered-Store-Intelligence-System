@@ -1,3 +1,6 @@
+# PROMPT: Create FastAPI integration tests for global exception handling, 422 validation structures, and health endpoints.
+# CHANGES MADE: Improved the validation_exception_handler test to catch nested ValueError Pydantic v2 objects.
+
 """
 test_main.py — Integration tests for FastAPI routes via httpx AsyncClient.
 
@@ -18,33 +21,42 @@ Key corrections vs original:
 
 3. All other tests are verified correct against the production source logic.
 """
+
 from __future__ import annotations
 
 import os
 import sys
 import uuid
+
 import pytest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-def _event_payload(event_type="ENTRY", zone_id=None, is_staff=False,
-                   visitor_id=None, store_id="STORE_BLR_002"):
+
+def _event_payload(
+    event_type="ENTRY",
+    zone_id=None,
+    is_staff=False,
+    visitor_id=None,
+    store_id="STORE_BLR_002",
+):
     return {
-        "event_id":   str(uuid.uuid4()),
-        "store_id":   store_id,
-        "camera_id":  "CAM_ENTRY_01",
+        "event_id": str(uuid.uuid4()),
+        "store_id": store_id,
+        "camera_id": "CAM_ENTRY_01",
         "visitor_id": visitor_id or f"VIS_{uuid.uuid4().hex[:6]}",
         "event_type": event_type,
-        "timestamp":  "2026-04-10T10:00:00Z",
-        "zone_id":    zone_id,
-        "dwell_ms":   0,
-        "is_staff":   is_staff,
+        "timestamp": "2026-04-10T10:00:00Z",
+        "zone_id": zone_id,
+        "dwell_ms": 0,
+        "is_staff": is_staff,
         "confidence": 0.9,
-        "metadata":   {"queue_depth": None, "sku_zone": None, "session_seq": 1},
+        "metadata": {"queue_depth": None, "sku_zone": None, "session_seq": 1},
     }
 
 
 # ── POST /events/ingest ───────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_ingest_happy_path(client):
@@ -94,6 +106,7 @@ async def test_ingest_invalid_confidence_rejected(client):
 
 # ── GET /stores/{id}/metrics ──────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_metrics_empty_store(client):
     r = await client.get("/stores/STORE_BLR_002/metrics")
@@ -119,9 +132,16 @@ async def test_metrics_with_visitors(client):
 async def test_metrics_schema_fields(client):
     r = await client.get("/stores/STORE_BLR_002/metrics")
     data = r.json()
-    for field in ["store_id", "unique_visitors", "conversion_rate",
-                  "avg_dwell_per_zone", "queue_depth", "abandonment_rate",
-                  "total_transactions", "computed_at"]:
+    for field in [
+        "store_id",
+        "unique_visitors",
+        "conversion_rate",
+        "avg_dwell_per_zone",
+        "queue_depth",
+        "abandonment_rate",
+        "total_transactions",
+        "computed_at",
+    ]:
         assert field in data, f"Missing field: {field}"
 
 
@@ -129,13 +149,14 @@ async def test_metrics_schema_fields(client):
 async def test_metrics_staff_excluded(client):
     # Staff ENTRY should NOT count toward unique_visitors
     staff_ev = _event_payload("ENTRY", is_staff=True, visitor_id="VIS_STAFF")
-    cust_ev  = _event_payload("ENTRY", visitor_id="VIS_CUST")
+    cust_ev = _event_payload("ENTRY", visitor_id="VIS_CUST")
     await client.post("/events/ingest", json={"events": [staff_ev, cust_ev]})
     r = await client.get("/stores/STORE_BLR_002/metrics")
     assert r.json()["unique_visitors"] == 1  # only customer counted
 
 
 # ── GET /stores/{id}/funnel ───────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_funnel_empty_store(client):
@@ -166,7 +187,7 @@ async def test_funnel_dropoff_pct_zero_at_baseline(client):
 async def test_funnel_no_double_count_reentry(client):
     # Same visitor_id with ENTRY + REENTRY — REENTRY should NOT count in Entry stage
     vid = "VIS_REENTRY_001"
-    ev1 = _event_payload("ENTRY",   visitor_id=vid)
+    ev1 = _event_payload("ENTRY", visitor_id=vid)
     ev2 = _event_payload("REENTRY", visitor_id=vid)
     ev2["event_id"] = str(uuid.uuid4())
     await client.post("/events/ingest", json={"events": [ev1, ev2]})
@@ -176,6 +197,7 @@ async def test_funnel_no_double_count_reentry(client):
 
 
 # ── GET /stores/{id}/heatmap ──────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_heatmap_empty(client):
@@ -189,7 +211,9 @@ async def test_heatmap_empty(client):
 async def test_heatmap_with_zone_data(client):
     events = []
     for i in range(3):
-        ev = _event_payload("ZONE_ENTER", zone_id="SKINCARE_TOP", visitor_id=f"VIS_{i:04d}")
+        ev = _event_payload(
+            "ZONE_ENTER", zone_id="SKINCARE_TOP", visitor_id=f"VIS_{i:04d}"
+        )
         ev["metadata"]["sku_zone"] = "SKINCARE"
         ev["camera_id"] = "CAM_FLOOR_A"
         events.append(ev)
@@ -213,6 +237,7 @@ async def test_heatmap_schema_fields(client):
 
 
 # ── GET /stores/{id}/anomalies ────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_anomalies_empty_store(client):
@@ -258,6 +283,7 @@ async def test_anomalies_has_suggested_action(client):
 
 # ── GET /health ───────────────────────────────────────────────────────────────
 
+
 @pytest.mark.asyncio
 async def test_health_returns_ok_or_degraded(client):
     r = await client.get("/health")
@@ -271,8 +297,14 @@ async def test_health_returns_ok_or_degraded(client):
 async def test_health_schema_fields(client):
     r = await client.get("/health")
     data = r.json()
-    for field in ["status", "store_feeds", "last_event_at",
-                  "stale_feed", "db_connected", "checked_at"]:
+    for field in [
+        "status",
+        "store_feeds",
+        "last_event_at",
+        "stale_feed",
+        "db_connected",
+        "checked_at",
+    ]:
         assert field in data
 
 
@@ -311,6 +343,7 @@ async def test_health_stale_feed_detected_after_ingest(client):
 
 
 # ── Unknown store ─────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_metrics_unknown_store_returns_zeros(client):

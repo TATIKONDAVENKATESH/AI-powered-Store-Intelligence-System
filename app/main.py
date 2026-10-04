@@ -1,31 +1,32 @@
 from __future__ import annotations
+
 import logging
 import os
 import time
 import uuid
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Request, Response, Depends, Path
+from fastapi import Depends, FastAPI, Path, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine, async_sessionmaker
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
+from app.anomalies import compute_anomalies
+from app.funnel import compute_funnel
+from app.health import compute_health
+from app.heatmap import compute_heatmap
+from app.ingestion import ingest_events, load_pos_transactions
+from app.metrics import compute_metrics
 from app.models import (
+    AnomalyResponse,
+    FunnelResponse,
+    HealthResponse,
+    HeatmapResponse,
     IngestRequest,
     IngestResponse,
     MetricsResponse,
-    FunnelResponse,
-    HeatmapResponse,
-    AnomalyResponse,
-    HealthResponse,
 )
-from app.ingestion import ingest_events, load_pos_transactions
-from app.metrics import compute_metrics
-from app.funnel import compute_funnel
-from app.heatmap import compute_heatmap
-from app.anomalies import compute_anomalies
-from app.health import compute_health
 
 # ── Structured logging ────────────────────────────────────────────────────────
 log_level = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -41,13 +42,14 @@ DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "sqlite+aiosqlite:///./storage/store_intelligence.db",
 )
-POS_CSV    = os.getenv("POS_CSV", "./data/pos_transactions.csv")
+POS_CSV = os.getenv("POS_CSV", "./data/pos_transactions.csv")
 SCHEMA_SQL = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-    "storage", "schema.sql",
+    "storage",
+    "schema.sql",
 )
 
-engine       = create_async_engine(DATABASE_URL, echo=False)
+engine = create_async_engine(DATABASE_URL, echo=False)
 # Named SessionLocal so test_main.py can monkeypatch main_mod.SessionLocal
 SessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -88,14 +90,18 @@ app = FastAPI(title="Store Intelligence API", version="1.0.0", lifespan=lifespan
 # Logs: trace_id, store_id, endpoint, latency_ms, event_count (ingest), status_code
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
-    trace_id   = str(uuid.uuid4())[:8]
+    trace_id = str(uuid.uuid4())[:8]
     start_time = time.perf_counter()
     response: Response = await call_next(request)
     latency_ms = round((time.perf_counter() - start_time) * 1000, 2)
-    store_id   = request.path_params.get("store_id", "")
+    store_id = request.path_params.get("store_id", "")
     logger.info(
         '{"trace_id":"%s","store_id":"%s","endpoint":"%s","latency_ms":%s,"status_code":%d}',
-        trace_id, store_id, request.url.path, latency_ms, response.status_code,
+        trace_id,
+        store_id,
+        request.url.path,
+        latency_ms,
+        response.status_code,
     )
     return response
 
@@ -103,9 +109,23 @@ async def log_requests(request: Request, call_next):
 # ── 422 validation error handler ─────────────────────────────────────────────
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    # Pydantic v2 errors() may include non-JSON-serializable objects in 'ctx'.
+    # Sanitise by converting any non-primitive ctx values to strings.
+    def _sanitise(err: dict) -> dict:
+        result = {k: v for k, v in err.items() if k != "ctx"}
+        if "ctx" in err:
+            result["ctx"] = {
+                k: str(v)
+                if not isinstance(v, (str, int, float, bool, type(None)))
+                else v
+                for k, v in err["ctx"].items()
+            }
+        return result
+
+    sanitised = [_sanitise(e) for e in exc.errors()]
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
+        content={"detail": sanitised},
     )
 
 
@@ -115,11 +135,12 @@ async def global_exception_handler(request: Request, exc: Exception):
     logger.error("Unhandled error: %s", exc, exc_info=True)
     return JSONResponse(
         status_code=503,
-        content={"error": "Service temporarily unavailable", "detail": str(exc)},
+        content={"error": "Service temporarily unavailable", "detail": repr(exc)},
     )
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
+
 
 @app.post("/events/ingest", response_model=IngestResponse)
 async def ingest(payload: IngestRequest, db: AsyncSession = Depends(get_db)):
@@ -137,17 +158,18 @@ Real-time store metrics.
 Example store IDs:
 - ST1008
 - ST1076
-"""
+""",
 )
 async def metrics(
     store_id: str = Path(
         ...,
-        description="Valid store IDs: ST1008, ST1076",
-        example="ST1008",
+        description="Store ID (e.g. ST1008, ST1076, STORE_BLR_002)",
+        examples=["ST1008"],
     ),
     db: AsyncSession = Depends(get_db),
 ):
     return await compute_metrics(store_id, db)
+
 
 @app.get(
     "/stores/{store_id}/funnel",
@@ -159,17 +181,18 @@ async def metrics(
 Example store IDs:
 - ST1008
 - ST1076
-"""
+""",
 )
 async def funnel(
     store_id: str = Path(
         ...,
-        description="Valid store IDs: ST1008, ST1076",
-        example="ST1008",
+        description="Store ID (e.g. ST1008, ST1076, STORE_BLR_002)",
+        examples=["ST1008"],
     ),
     db: AsyncSession = Depends(get_db),
 ):
     return await compute_funnel(store_id, db)
+
 
 @app.get(
     "/stores/{store_id}/heatmap",
@@ -181,17 +204,18 @@ Zone visit frequency and average dwell.
 Example store IDs:
 - ST1008
 - ST1076
-"""
+""",
 )
 async def heatmap(
     store_id: str = Path(
         ...,
-        description="Valid store IDs: ST1008, ST1076",
-        example="ST1008",
+        description="Store ID (e.g. ST1008, ST1076, STORE_BLR_002)",
+        examples=["ST1008"],
     ),
     db: AsyncSession = Depends(get_db),
 ):
     return await compute_heatmap(store_id, db)
+
 
 @app.get(
     "/stores/{store_id}/anomalies",
@@ -203,17 +227,18 @@ Detected operational anomalies.
 Example store IDs:
 - ST1008
 - ST1076
-"""
+""",
 )
 async def anomalies(
     store_id: str = Path(
         ...,
-        description="Valid store IDs: ST1008, ST1076",
-        example="ST1008",
+        description="Store ID (e.g. ST1008, ST1076, STORE_BLR_002)",
+        examples=["ST1008"],
     ),
     db: AsyncSession = Depends(get_db),
 ):
     return await compute_anomalies(store_id, db)
+
 
 @app.get(
     "/health",

@@ -1,3 +1,6 @@
+# PROMPT: Write tests for the health endpoint to verify db_connected status, overall status string, and the stale feed detection logic when >10 minutes lag.
+# CHANGES MADE: Handled the max timestamp calculation for dead zone correctly based on event context rather than wall clock.
+
 """
 test_health.py — Tests for GET /health
 
@@ -14,19 +17,20 @@ Key production behaviour verified here:
   - status="ok" when no feeds OR all feeds fresh; status="degraded" when any stale
   - status="down" only when DB query itself throws
 """
+
 from __future__ import annotations
 
 import uuid
-import pytest
-from datetime import datetime, timezone, timedelta
-from sqlalchemy import text
-
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, Mock
+
+import pytest
+from sqlalchemy import text
 
 from app.health import compute_health
 
-
 # ── Helpers ──────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_debug_tables(db_session):
@@ -35,9 +39,11 @@ async def test_debug_tables(db_session):
     )
     print(result.fetchall())
 
+
 async def _insert_event(db, camera_id: str, store_id: str, timestamp: str) -> None:
     """Insert a minimal event for a given camera and timestamp."""
-    await db.execute(text("""
+    await db.execute(
+        text("""
         INSERT OR IGNORE INTO events
           (event_id, store_id, camera_id, visitor_id, event_type, timestamp,
            zone_id, dwell_ms, is_staff, confidence, queue_depth, sku_zone,
@@ -46,26 +52,29 @@ async def _insert_event(db, camera_id: str, store_id: str, timestamp: str) -> No
           (:event_id, :store_id, :camera_id, :visitor_id, :event_type, :timestamp,
            :zone_id, :dwell_ms, :is_staff, :confidence, :queue_depth, :sku_zone,
            :session_seq, :ingested_at)
-    """), {
-        "event_id":    str(uuid.uuid4()),
-        "store_id":    store_id,
-        "camera_id":   camera_id,
-        "visitor_id":  "VIS_HEALTH_TEST",
-        "event_type":  "ENTRY",
-        "timestamp":   timestamp,
-        "zone_id":     None,
-        "dwell_ms":    0,
-        "is_staff":    0,
-        "confidence":  0.9,
-        "queue_depth": None,
-        "sku_zone":    None,
-        "session_seq": 0,
-        "ingested_at": datetime.now(timezone.utc).isoformat(),
-    })
+    """),
+        {
+            "event_id": str(uuid.uuid4()),
+            "store_id": store_id,
+            "camera_id": camera_id,
+            "visitor_id": "VIS_HEALTH_TEST",
+            "event_type": "ENTRY",
+            "timestamp": timestamp,
+            "zone_id": None,
+            "dwell_ms": 0,
+            "is_staff": 0,
+            "confidence": 0.9,
+            "queue_depth": None,
+            "sku_zone": None,
+            "session_seq": 0,
+            "ingested_at": datetime.now(timezone.utc).isoformat(),
+        },
+    )
     await db.commit()
 
 
 # ── Tests ─────────────────────────────────────────────────────────────────────
+
 
 @pytest.mark.asyncio
 async def test_health_db_connected(client):
@@ -80,8 +89,14 @@ async def test_health_response_structure(client):
     """Response must contain all required fields defined in HealthResponse model."""
     resp = await client.get("/health")
     body = resp.json()
-    for field in ["status", "store_feeds", "last_event_at",
-                  "stale_feed", "db_connected", "checked_at"]:
+    for field in [
+        "status",
+        "store_feeds",
+        "last_event_at",
+        "stale_feed",
+        "db_connected",
+        "checked_at",
+    ]:
         assert field in body, f"Missing field: {field}"
 
 
@@ -140,7 +155,7 @@ async def test_health_mixed_feeds_any_stale_degrades(client, db_session):
     One fresh camera + one stale camera → stale_feed=True, status=degraded.
     stale_feed is True if ANY camera is stale.
     """
-    now_iso  = datetime.now(timezone.utc).isoformat()
+    now_iso = datetime.now(timezone.utc).isoformat()
     stale_ts = (datetime.now(timezone.utc) - timedelta(minutes=20)).isoformat()
 
     await _insert_event(db_session, "CAM_FRESH2", "ST1076", now_iso)
@@ -164,7 +179,9 @@ async def test_health_boundary_exactly_10_minutes(client, db_session):
     ts at exactly 10min = stale_cutoff → NOT stale (equal is not less than).
     ts at 10min + 1s < stale_cutoff → IS stale.
     """
-    borderline_ts = (datetime.now(timezone.utc) - timedelta(minutes=10, seconds=1)).isoformat()
+    borderline_ts = (
+        datetime.now(timezone.utc) - timedelta(minutes=10, seconds=1)
+    ).isoformat()
     await _insert_event(db_session, "CAM_BORDER", "ST1076", borderline_ts)
 
     resp = await client.get("/health")
@@ -207,6 +224,7 @@ async def test_health_camera_feed_structure(client, db_session):
         assert "stale" in feed
         assert isinstance(feed["stale"], bool)
 
+
 @pytest.mark.asyncio
 async def test_compute_health_db_failure():
     """Cover status='down' branch when DB connectivity check fails."""
@@ -233,9 +251,7 @@ async def test_compute_health_invalid_timestamp():
     ping_result = Mock()
 
     camera_result = Mock()
-    camera_result.fetchall.return_value = [
-        ("CAM_BAD", "invalid-timestamp")
-    ]
+    camera_result.fetchall.return_value = [("CAM_BAD", "invalid-timestamp")]
 
     global_result = Mock()
     global_result.scalar.return_value = "invalid-timestamp"

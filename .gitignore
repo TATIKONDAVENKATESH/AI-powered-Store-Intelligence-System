@@ -1,6 +1,6 @@
 # Python
 
-**pycache**/
+__pycache__/
 *.py[cod]
 *.pyo
 *.pyd
@@ -83,7 +83,8 @@ data/Videos/
 data/camera_frames/
 
 # Docker
-
 *.pid
 
-tools/
+# Challenge files
+*.pdf
+pdf_content.txt

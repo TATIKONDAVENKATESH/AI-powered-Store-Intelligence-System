@@ -1,16 +1,18 @@
 from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
-from typing import List
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.models import MetricsResponse, ZoneDwell
 
 logger = logging.getLogger(__name__)
 
 
 async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
-    """Compute real-time store metrics. Excludes is_staff events throughout."""
+    # Compute real-time store metrics. Excludes is_staff events throughout.
     now_utc = datetime.now(timezone.utc).isoformat()
 
     # Unique customer visitors — distinct visitor_ids, staff excluded
@@ -39,7 +41,7 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
             INNER JOIN pos_transactions p
                 ON  p.store_id = e.store_id
                 AND datetime(p.timestamp) >= datetime(e.timestamp)
-                AND datetime(p.timestamp) <= datetime(e.timestamp, '+1800 seconds')
+                AND datetime(p.timestamp) <= datetime(e.timestamp, '+300 seconds')
             WHERE e.store_id = :sid
               AND e.zone_id LIKE '%BILLING%'
               AND e.is_staff = 0
@@ -68,7 +70,7 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
         {"sid": store_id},
     )
     zone_rows = result.fetchall()
-    avg_dwell_per_zone: List[ZoneDwell] = [
+    avg_dwell_per_zone: list[ZoneDwell] = [
         ZoneDwell(
             zone_id=row[0],
             avg_dwell_seconds=round(row[1] or 0.0, 2),
@@ -106,14 +108,17 @@ async def compute_metrics(store_id: str, db: AsyncSession) -> MetricsResponse:
         """),
         {"sid": store_id},
     )
-    row      = result.fetchone()
-    joined   = row[0] or 0
+    row = result.fetchone()
+    joined = row[0] or 0
     abandoned = row[1] or 0
     abandonment_rate = round(abandoned / joined, 4) if joined > 0 else 0.0
 
     logger.debug(
         "Metrics store=%s visitors=%d converted=%d rate=%.4f",
-        store_id, unique_visitors, converted_visitors, conversion_rate,
+        store_id,
+        unique_visitors,
+        converted_visitors,
+        conversion_rate,
     )
 
     return MetricsResponse(

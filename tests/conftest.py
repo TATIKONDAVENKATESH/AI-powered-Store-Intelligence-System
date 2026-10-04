@@ -47,6 +47,7 @@ _SCHEMA_PATH = os.path.join(
 # Helpers
 # ------------------------------------------------------------------
 
+
 async def _apply_schema() -> None:
     with open(_SCHEMA_PATH, "r", encoding="utf-8") as f:
         schema = f.read()
@@ -75,6 +76,7 @@ async def _clear_tables() -> None:
 # Runs before EVERY test
 # ------------------------------------------------------------------
 
+
 @pytest_asyncio.fixture(autouse=True)
 async def setup_database():
     await _apply_schema()
@@ -89,6 +91,7 @@ async def setup_database():
 # Shared DB session
 # ------------------------------------------------------------------
 
+
 @pytest_asyncio.fixture
 async def db_session():
     async with TEST_SESSION() as session:
@@ -98,6 +101,7 @@ async def db_session():
 # ------------------------------------------------------------------
 # FastAPI client
 # ------------------------------------------------------------------
+
 
 @pytest_asyncio.fixture
 async def client():

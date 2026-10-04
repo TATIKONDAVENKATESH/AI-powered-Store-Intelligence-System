@@ -8,7 +8,7 @@ Three decisions made during this build, each documented as the challenge require
 
 ### Problem
 
-Person detection is the foundation of every downstream metric. The wrong model makes the pipeline either too slow to run on a CPU or too inaccurate to be useful. The challenge footage is 1080p at 15fps, and the submission constraint is a single-machine Docker deployment with no GPU assumed.
+Person detection is the foundation of every downstream metric. The wrong model makes the pipeline either too slow to run on a CPU or too inaccurate to be useful. The footage is 1080p at 15fps, and the constraint is a single-machine Docker deployment with no GPU assumed.
 
 ### Options Considered
 
@@ -32,7 +32,7 @@ Claude suggested YOLOv8s. The argument was that it handles partial occlusion sig
 
 ### Why
 
-At 15fps, YOLOv8s at 50–80ms per frame means 3–6× real-time on CPU. A 20-minute clip would take 60–120 minutes to process. YOLOv8n at 20–40ms processes a 20-minute clip in roughly 20–40 minutes — still slow, but within the window where it can complete before a submission deadline. The challenge states explicitly that low-confidence detections should be emitted rather than suppressed, and the `confidence` field in every event preserves uncertainty. A system that finishes processing all clips and feeds the API is more useful than a more accurate system that cannot process the full dataset.
+At 15fps, YOLOv8s at 50–80ms per frame means 3–6× real-time on CPU. A 20-minute clip would take 60–120 minutes to process. YOLOv8n at 20–40ms processes a 20-minute clip in roughly 20–40 minutes — still slow, but within a reasonable timeframe. The requirement states explicitly that low-confidence detections should be emitted rather than suppressed, and the `confidence` field in every event preserves uncertainty. A system that finishes processing all clips and feeds the API is more useful than a more accurate system that cannot process the full dataset.
 
 The confidence threshold was lowered from the default 0.4 to 0.25 after observing that face-blurred footage reduces per-frame detection confidence on the head region. Lower threshold recovers some of those detections at the cost of more false positives, which the `is_staff` flag and `confidence` field in the event schema help downstream consumers handle.
 
@@ -182,9 +182,9 @@ Health endpoint returns `stale_feed: true` when the most recent event timestamp 
 
 FastAPI was chosen over Flask primarily because of Pydantic validation. The `StoreEvent` model validates all twelve fields before any application code runs. Invalid events are rejected with structured error responses (`422 Unprocessable Entity` with field-level error details) rather than causing silent data corruption. The AI agreed with this choice.
 
-SQLite was chosen over PostgreSQL because the challenge's acceptance gate is `docker compose up` on a clean machine with no manual setup. PostgreSQL adds a service that requires a health check before the API can start, connection string configuration, and a first-run initialisation step. For a single-store, batch-ingest workload — one pipeline run writes events, then the API serves reads — SQLite's single-writer limitation is not a bottleneck. The `aiosqlite` async driver means all five analytics endpoints handle concurrent read requests without blocking. The AI's PostgreSQL suggestion was overridden deliberately, with the reasoning documented here.
+SQLite was chosen over PostgreSQL because the requirement is `docker compose up` on a clean machine with no manual setup. PostgreSQL adds a service that requires a health check before the API can start, connection string configuration, and a first-run initialisation step. For a single-store, batch-ingest workload — one pipeline run writes events, then the API serves reads — SQLite's single-writer limitation is not a bottleneck. The `aiosqlite` async driver means all five analytics endpoints handle concurrent read requests without blocking. The AI's PostgreSQL suggestion was overridden deliberately, with the reasoning documented here.
 
-JSONL + HTTP ingest was chosen over direct DB writes and Redis Streams because it satisfies three requirements simultaneously: the pipeline can run offline without the API running, the JSONL files are auditable on disk for debugging, and `event_id` UUID deduplication in `ingest_events.py` makes the ingest idempotent. The same JSONL file can be posted multiple times during development without inflating counts. Redis Streams would require an additional Docker service and adds a dependency that can fail independently — not acceptable for an acceptance-gate requirement of `docker compose up`.
+JSONL + HTTP ingest was chosen over direct DB writes and Redis Streams because it satisfies three requirements simultaneously: the pipeline can run offline without the API running, the JSONL files are auditable on disk for debugging, and `event_id` UUID deduplication in `ingest_events.py` makes the ingest idempotent. The same JSONL file can be posted multiple times during development without inflating counts. Redis Streams would require an additional Docker service and adds a dependency that can fail independently — not acceptable for a strict requirement of `docker compose up`.
 
 ### Trade-offs
 

@@ -1,9 +1,12 @@
 from __future__ import annotations
+
 import logging
-from datetime import datetime, timezone, timedelta
+from datetime import datetime, timedelta, timezone
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
-from app.models import HealthResponse, CameraFeedStatus
+
+from app.models import CameraFeedStatus, HealthResponse
 
 logger = logging.getLogger(__name__)
 
@@ -12,7 +15,7 @@ STALE_THRESHOLD_MINUTES = 10
 
 async def compute_health(db: AsyncSession) -> HealthResponse:
     """DB connectivity + per-camera feed staleness. STALE_FEED warning if >10 min lag."""
-    now_utc    = datetime.now(timezone.utc)
+    now_utc = datetime.now(timezone.utc)
     checked_at = now_utc.isoformat()
 
     try:
@@ -52,11 +55,13 @@ async def compute_health(db: AsyncSession) -> HealthResponse:
                 pass
         if is_stale:
             any_stale = True
-        store_feeds.append(CameraFeedStatus(
-            camera_id=cam_id,
-            last_event_at=last_ts,
-            stale=is_stale,
-        ))
+        store_feeds.append(
+            CameraFeedStatus(
+                camera_id=cam_id,
+                last_event_at=last_ts,
+                stale=is_stale,
+            )
+        )
 
     # Overall last event across all cameras
     result = await db.execute(text("SELECT MAX(timestamp) FROM events"))
