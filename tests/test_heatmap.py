@@ -1,6 +1,3 @@
-# PROMPT: Generate tests for the heatmap endpoint, ensuring dwell time normalization 0-100 works and data_confidence flags <20 sessions properly.
-# CHANGES MADE: Added scenarios for empty datasets and verified the normalization math.
-
 """
 test_heatmap.py — Tests for GET /stores/{store_id}/heatmap
 

@@ -1,6 +1,3 @@
-# PROMPT: Write unit tests for the pipeline ingestion script (ingest_events.py), handling CLI args, JSONL reading, and HTTP POST mocking.
-# CHANGES MADE: Replaced requests.post with a mock and handled HTTP errors correctly.
-
 from __future__ import annotations
 
 import json

@@ -1,6 +1,3 @@
-# PROMPT: Write exhaustive tests for the anomalies endpoint, covering BILLING_QUEUE_SPIKE, CONVERSION_DROP, and DEAD_ZONE anomalies including edge cases.
-# CHANGES MADE: Added zero-purchase and empty-store edge cases. Adjusted time windows to match the 300s logic.
-
 """
 test_anomalies.py — Tests for GET /stores/{store_id}/anomalies
 

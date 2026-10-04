@@ -1,6 +1,3 @@
-# PROMPT: Write tests for the funnel endpoint, ensuring 4 specific stages are tracked, session dedup works correctly, and staff are excluded.
-# CHANGES MADE: Added explicit tests for re-entry logic and ensuring funnel stages are correctly ordered.
-
 """
 test_funnel.py — Tests for GET /stores/{store_id}/funnel
 

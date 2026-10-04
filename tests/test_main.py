@@ -1,6 +1,3 @@
-# PROMPT: Create FastAPI integration tests for global exception handling, 422 validation structures, and health endpoints.
-# CHANGES MADE: Improved the validation_exception_handler test to catch nested ValueError Pydantic v2 objects.
-
 """
 test_main.py — Integration tests for FastAPI routes via httpx AsyncClient.
 

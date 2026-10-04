@@ -1,6 +1,3 @@
-# PROMPT: Write tests for the ingestion layer focusing on batch sizes, idempotency, event_id deduplication, and Pydantic schema validation.
-# CHANGES MADE: Adjusted the assertions for Pydantic v2 error structures and SQLite constraints.
-
 """
 test_ingestion.py — Tests for app/ingestion.py
 

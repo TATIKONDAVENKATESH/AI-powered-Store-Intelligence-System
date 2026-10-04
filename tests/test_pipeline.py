@@ -1,6 +1,3 @@
-# PROMPT: Write tests for the detection pipeline components: tracking, ReID, event emitter, and bounding box intersection logic.
-# CHANGES MADE: Handled YOLO confidence passthrough and boundary crossing edge cases in ReID.
-
 """
 test_pipeline.py — Tests for Pydantic models, EventEmitter, and ReIDTracker
 

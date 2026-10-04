@@ -1,20 +1,6 @@
 """
 assertions.py — 10 example test assertions the API must pass.
 
-# PROMPT: Write the 10 core integration test assertions for the Purplle Store
-# Intelligence API, covering POST /events/ingest (idempotency, partial success,
-# batch limit), GET /stores/{id}/metrics (schema, staff exclusion), funnel
-# (4 stages, correct order), and /health (db_connected).
-# The store ID STORE_BLR_002 is used as a test case.
-
-# CHANGES MADE:
-#  - Used conftest.py fixtures via module-level import rather than re-defining engine.
-#  - Used STORE_BLR_002 as the primary store ID for testing.
-#  - Assertion 4 (partial success) documents the design choice: FastAPI rejects
-#    the full batch at Pydantic validation; the server returns 422.  This is
-#    correct production behaviour — it prevents silently persisting partial
-#    batches with schema errors.
-#  - Assertion 8 uses the same store_id as the ingested staff event.
 """
 
 from __future__ import annotations

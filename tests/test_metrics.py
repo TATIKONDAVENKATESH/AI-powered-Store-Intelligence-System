@@ -1,6 +1,3 @@
-# PROMPT: Generate comprehensive tests for the metrics endpoint. Include unique visitors, conversion rate, dwell per zone, queue depth, and abandonment.
-# CHANGES MADE: Updated POS correlation time windows to 300 seconds and handled zero-transaction edge cases.
-
 """
 test_metrics.py — Tests for GET /stores/{store_id}/metrics
 

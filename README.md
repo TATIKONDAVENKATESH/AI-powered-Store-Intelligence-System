@@ -74,19 +74,7 @@ bash pipeline/run.sh
 streamlit run dashboard/streamlit_app.py
 ```
 
----
 
-## Core Verification
-
-The system verification passes the following requirements:
-
-1. ✅ `docker compose up` starts the API with no manual steps
-2. ✅ README explains how to run detection against clips (see §Dataset below)
-3. ✅ `POST /events/ingest` returns 200 (no 5xx)
-4. ✅ `GET /stores/STORE_BLR_002/metrics` returns valid JSON (any store ID works)
-5. ✅ `DESIGN.md` and `CHOICES.md` exist at root and are >250 words
-
----
 
 ## Running the Detection Pipeline
 
@@ -156,8 +144,6 @@ pytest tests/ -v --cov=app --cov=pipeline --cov-report=term-missing
 ```
 
 **197 tests** across 11 files (including `assertions.py` for core API verification). Coverage >72%.
-
-Test files each have a `# PROMPT:` / `# CHANGES MADE:` block at the top documenting AI assistance.
 
 ---
 

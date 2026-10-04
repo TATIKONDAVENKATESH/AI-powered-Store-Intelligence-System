@@ -1,6 +1,3 @@
-# PROMPT: Write tests for the health endpoint to verify db_connected status, overall status string, and the stale feed detection logic when >10 minutes lag.
-# CHANGES MADE: Handled the max timestamp calculation for dead zone correctly based on event context rather than wall clock.
-
 """
 test_health.py — Tests for GET /health
 
