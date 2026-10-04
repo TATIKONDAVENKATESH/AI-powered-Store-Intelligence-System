@@ -207,6 +207,8 @@ Dashboard is connected to the live API — metrics update as events are ingested
 
 ---
 
+## Repository Structure
+
 ```
 store-intelligence/
 ├── pipeline/       detect.py  tracker.py  emit.py  ingest_events.py  run.sh
