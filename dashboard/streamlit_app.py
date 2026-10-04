@@ -1,5 +1,5 @@
 """
-Live Store Intelligence Dashboard — Part E (Bonus +10 points)
+Live Store Intelligence Dashboard
 
 Real-time dashboard that polls all API endpoints every 5 seconds and shows:
 - Live system health with camera feed status
@@ -8,7 +8,6 @@ Real-time dashboard that polls all API endpoints every 5 seconds and shows:
 - Zone heatmap with visit frequency and dwell times
 - Active operational anomalies (BILLING_QUEUE_SPIKE, CONVERSION_DROP, DEAD_ZONE)
 
-Proves the pipeline and API are genuinely connected — not just batch-processed.
 """
 
 import os
@@ -89,167 +88,165 @@ with st.sidebar:
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
-placeholder = st.empty()
 
-while True:
-    ts = time.strftime("%H:%M:%S")
+ts = time.strftime("%H:%M:%S")
 
-    with placeholder.container():
-        # ── Header row ──────────────────────────────────────────────────────
-        col_title, col_live, col_ts = st.columns([4, 1, 1])
-        col_title.markdown("# 🏪 Store Intelligence — Live")
-        col_live.markdown(
-            '<span class="live-dot"></span><small>LIVE</small>',
-            unsafe_allow_html=True,
-        )
-        col_ts.markdown(f"<small>Updated: **{ts}**</small>", unsafe_allow_html=True)
+# ── Header row ──────────────────────────────────────────────────────
+col_title, col_live, col_ts = st.columns([4, 1, 1])
+col_title.markdown("# 🏪 Store Intelligence — Live")
+col_live.markdown(
+    '<span class="live-dot"></span><small>LIVE</small>',
+    unsafe_allow_html=True,
+)
+col_ts.markdown(f"<small>Updated: **{ts}**</small>", unsafe_allow_html=True)
 
-        # ── Health banner ───────────────────────────────────────────────────
-        health = fetch("/health")
-        if health:
-            status = health.get("status", "unknown")
-            db_ok = health.get("db_connected", False)
-            stale = health.get("stale_feed", False)
-            icon = "🟢" if status == "ok" else ("🟡" if status == "degraded" else "🔴")
+# ── Health banner ───────────────────────────────────────────────────
+health = fetch("/health")
+if health:
+    status = health.get("status", "unknown")
+    db_ok = health.get("db_connected", False)
+    stale = health.get("stale_feed", False)
+    icon = "🟢" if status == "ok" else ("🟡" if status == "degraded" else "🔴")
 
-            h1, h2, h3, h4 = st.columns(4)
-            h1.metric("System Status", f"{icon} {status.upper()}")
-            h2.metric("DB Connected", "✅ Yes" if db_ok else "❌ No")
-            h3.metric("Stale Feeds", "⚠️ Yes" if stale else "✅ None")
-            feeds = health.get("store_feeds", [])
-            h4.metric("Active Cameras", str(len(feeds)))
+    h1, h2, h3, h4 = st.columns(4)
+    h1.metric("System Status", f"{icon} {status.upper()}")
+    h2.metric("DB Connected", "✅ Yes" if db_ok else "❌ No")
+    h3.metric("Stale Feeds", "⚠️ Yes" if stale else "✅ None")
+    feeds = health.get("store_feeds", [])
+    h4.metric("Active Cameras", str(len(feeds)))
 
-            # Camera feed table
-            if feeds:
-                with st.expander("📷 Camera feed status", expanded=False):
-                    df_feeds = pd.DataFrame(feeds)
-                    df_feeds["stale"] = df_feeds["stale"].map(
-                        {True: "⚠️ Stale", False: "✅ Live"}
-                    )
-                    st.dataframe(df_feeds, use_container_width=True, hide_index=True)
-        else:
-            st.error(
-                f"⛔ **API unreachable at {API_URL}** — "
-                "is `docker compose up` running?  "
-                "Or set `API_URL` env var to your API address."
+    # Camera feed table
+    if feeds:
+        with st.expander("📷 Camera feed status", expanded=False):
+            df_feeds = pd.DataFrame(feeds)
+            df_feeds["stale"] = df_feeds["stale"].map(
+                {True: "⚠️ Stale", False: "✅ Live"}
             )
+            st.dataframe(df_feeds, use_container_width=True, hide_index=True)
+else:
+    st.error(
+        f"⛔ **API unreachable at {API_URL}** — "
+        "is `docker compose up` running?  "
+        "Or set `API_URL` env var to your API address."
+    )
 
-        st.divider()
+st.divider()
 
-        # ── Per-store panels ─────────────────────────────────────────────────
-        for store_id in stores_selected or STORE_IDS:
-            st.markdown(f"## 🏪 `{store_id}`")
-            tabs = st.tabs(["📊 Metrics", "🔽 Funnel", "🗺️ Heatmap", "⚠️ Anomalies"])
+# ── Per-store panels ─────────────────────────────────────────────────
+for store_id in stores_selected or STORE_IDS:
+    st.markdown(f"## 🏪 `{store_id}`")
+    tabs = st.tabs(["📊 Metrics", "🔽 Funnel", "🗺️ Heatmap", "⚠️ Anomalies"])
 
-            # ── Metrics tab ─────────────────────────────────────────────────
-            with tabs[0]:
-                m = fetch(f"/stores/{store_id}/metrics")
-                if m:
-                    c1, c2, c3, c4, c5 = st.columns(5)
-                    c1.metric("Unique Visitors", m.get("unique_visitors", 0))
-                    c2.metric("Conversion Rate", f"{m.get('conversion_rate', 0):.1%}")
-                    c3.metric("Queue Depth", m.get("queue_depth", 0))
-                    c4.metric("Abandonment Rate", f"{m.get('abandonment_rate', 0):.1%}")
-                    c5.metric("POS Transactions", m.get("total_transactions", 0))
+    # ── Metrics tab ─────────────────────────────────────────────────
+    with tabs[0]:
+        m = fetch(f"/stores/{store_id}/metrics")
+        if m:
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Unique Visitors", m.get("unique_visitors", 0))
+            c2.metric("Conversion Rate", f"{m.get('conversion_rate', 0):.1%}")
+            c3.metric("Queue Depth", m.get("queue_depth", 0))
+            c4.metric("Abandonment Rate", f"{m.get('abandonment_rate', 0):.1%}")
+            c5.metric("POS Transactions", m.get("total_transactions", 0))
 
-                    dwells = m.get("avg_dwell_per_zone", [])
-                    if dwells:
-                        st.markdown("**Average dwell time per zone (seconds)**")
-                        df_dwell = pd.DataFrame(dwells)
-                        st.bar_chart(df_dwell.set_index("zone_id")["avg_dwell_seconds"])
-                else:
-                    st.warning(f"Metrics unavailable for {store_id}")
+            dwells = m.get("avg_dwell_per_zone", [])
+            if dwells:
+                st.markdown("**Average dwell time per zone (seconds)**")
+                df_dwell = pd.DataFrame(dwells)
+                st.bar_chart(df_dwell.set_index("zone_id")["avg_dwell_seconds"])
+        else:
+            st.warning(f"Metrics unavailable for {store_id}")
 
-            # ── Funnel tab ──────────────────────────────────────────────────
-            with tabs[1]:
-                funnel = fetch(f"/stores/{store_id}/funnel")
-                if funnel and funnel.get("stages"):
-                    stages = funnel["stages"]
-                    fcols = st.columns(len(stages))
-                    for i, stage in enumerate(stages):
-                        delta = (
-                            f"−{stage['drop_off_pct']:.1f}% drop-off"
-                            if stage["drop_off_pct"] > 0
-                            else None
-                        )
-                        fcols[i].metric(
-                            stage["stage"],
-                            f"{stage['count']:,}",
-                            delta=delta,
-                            delta_color="inverse",
-                        )
+    # ── Funnel tab ──────────────────────────────────────────────────
+    with tabs[1]:
+        funnel = fetch(f"/stores/{store_id}/funnel")
+        if funnel and funnel.get("stages"):
+            stages = funnel["stages"]
+            fcols = st.columns(len(stages))
+            for i, stage in enumerate(stages):
+                delta = (
+                    f"−{stage['drop_off_pct']:.1f}% drop-off"
+                    if stage["drop_off_pct"] > 0
+                    else None
+                )
+                fcols[i].metric(
+                    stage["stage"],
+                    f"{stage['count']:,}",
+                    delta=delta,
+                    delta_color="inverse",
+                )
 
-                    # Funnel bar chart
-                    df_funnel = pd.DataFrame(stages)
-                    st.markdown("**Funnel counts**")
-                    st.bar_chart(df_funnel.set_index("stage")["count"])
-                else:
-                    st.info("No funnel data yet — ingest some events first.")
+            # Funnel bar chart
+            df_funnel = pd.DataFrame(stages)
+            st.markdown("**Funnel counts**")
+            st.bar_chart(df_funnel.set_index("stage")["count"])
+        else:
+            st.info("No funnel data yet — ingest some events first.")
 
-            # ── Heatmap tab ─────────────────────────────────────────────────
-            with tabs[2]:
-                heatmap = fetch(f"/stores/{store_id}/heatmap")
-                if heatmap and heatmap.get("zones"):
-                    zones = heatmap["zones"]
-                    df_heat = pd.DataFrame(zones)
+    # ── Heatmap tab ─────────────────────────────────────────────────
+    with tabs[2]:
+        heatmap = fetch(f"/stores/{store_id}/heatmap")
+        if heatmap and heatmap.get("zones"):
+            zones = heatmap["zones"]
+            df_heat = pd.DataFrame(zones)
 
-                    # Show normalised score as horizontal bar chart
-                    st.markdown("**Zone engagement score (normalised 0–100)**")
-                    st.bar_chart(df_heat.set_index("zone_id")["normalised_score"])
+            # Show normalised score as horizontal bar chart
+            st.markdown("**Zone engagement score (normalised 0–100)**")
+            st.bar_chart(df_heat.set_index("zone_id")["normalised_score"])
 
-                    # Detailed table
-                    df_display = df_heat[
-                        [
-                            "zone_id",
-                            "visit_frequency",
-                            "avg_dwell_seconds",
-                            "normalised_score",
-                            "data_confidence",
-                        ]
-                    ].copy()
-                    df_display["data_confidence"] = df_display["data_confidence"].map(
-                        {True: "✅ High", False: "⚠️ Low (<20 sessions)"}
+            # Detailed table
+            df_display = df_heat[
+                [
+                    "zone_id",
+                    "visit_frequency",
+                    "avg_dwell_seconds",
+                    "normalised_score",
+                    "data_confidence",
+                ]
+            ].copy()
+            df_display["data_confidence"] = df_display["data_confidence"].map(
+                {True: "✅ High", False: "⚠️ Low (<20 sessions)"}
+            )
+            df_display.columns = [
+                "Zone",
+                "Visits",
+                "Avg Dwell (s)",
+                "Score",
+                "Confidence",
+            ]
+            st.dataframe(df_display, use_container_width=True, hide_index=True)
+        else:
+            st.info("No heatmap data yet.")
+
+    # ── Anomalies tab ────────────────────────────────────────────────
+    with tabs[3]:
+        anom = fetch(f"/stores/{store_id}/anomalies")
+        if anom:
+            anomalies = anom.get("anomalies", [])
+            if anomalies:
+                for a in anomalies:
+                    css = severity_class(a["severity"])
+                    icon = severity_icon(a["severity"])
+                    st.markdown(
+                        f'<div class="{css}">'
+                        f"{icon} <strong>{a['anomaly_type']}</strong> "
+                        f"<em>({a['severity']})</em><br>"
+                        f"{a['description']}<br>"
+                        f"<small>Action: {a['suggested_action']}</small>"
+                        f"</div>",
+                        unsafe_allow_html=True,
                     )
-                    df_display.columns = [
-                        "Zone",
-                        "Visits",
-                        "Avg Dwell (s)",
-                        "Score",
-                        "Confidence",
-                    ]
-                    st.dataframe(df_display, use_container_width=True, hide_index=True)
-                else:
-                    st.info("No heatmap data yet.")
+            else:
+                st.success("✅ No active anomalies detected.")
+        else:
+            st.warning("Anomaly data unavailable.")
 
-            # ── Anomalies tab ────────────────────────────────────────────────
-            with tabs[3]:
-                anom = fetch(f"/stores/{store_id}/anomalies")
-                if anom:
-                    anomalies = anom.get("anomalies", [])
-                    if anomalies:
-                        for a in anomalies:
-                            css = severity_class(a["severity"])
-                            icon = severity_icon(a["severity"])
-                            st.markdown(
-                                f'<div class="{css}">'
-                                f"{icon} <strong>{a['anomaly_type']}</strong> "
-                                f"<em>({a['severity']})</em><br>"
-                                f"{a['description']}<br>"
-                                f"<small>Action: {a['suggested_action']}</small>"
-                                f"</div>",
-                                unsafe_allow_html=True,
-                            )
-                    else:
-                        st.success("✅ No active anomalies detected.")
-                else:
-                    st.warning("Anomaly data unavailable.")
+# ── Footer ───────────────────────────────────────────────────────────
+st.divider()
+st.caption(
+    f"🔄 Auto-refreshing every **{refresh}s** · "
+    f"API: `{API_URL}` · "
+    f"[API Docs]({API_URL}/docs)"
+)
 
-        # ── Footer ───────────────────────────────────────────────────────────
-        st.divider()
-        st.caption(
-            f"🔄 Auto-refreshing every **{refresh}s** · "
-            f"API: `{API_URL}` · "
-            f"[API Docs]({API_URL}/docs)"
-        )
-
-    time.sleep(refresh)
+time.sleep(refresh)
+st.rerun()
