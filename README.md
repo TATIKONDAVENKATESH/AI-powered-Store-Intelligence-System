@@ -68,7 +68,7 @@ pip install -r requirements.txt
 uvicorn app.main:app --host 0.0.0.0 --port 8000
 
 # 3. Ingest pre-generated events (new terminal)
-bash pipeline/run.sh
+python pipeline/ingest_events.py --file data/generated_events/all_events.jsonl
 
 # 4. Start dashboard (new terminal)
 streamlit run dashboard/streamlit_app.py
@@ -97,7 +97,7 @@ python pipeline/detect.py --store ST1008 --camera CAM_BILLING --video "data/Vide
 python -c "from pipeline.emit import merge_event_files; merge_event_files('./data/generated_events/all_events.jsonl')"
 
 # Ingest into the running API
-bash pipeline/run.sh
+python pipeline/ingest_events.py --file data/generated_events/all_events.jsonl
 ```
 
 Events are written to `data/generated_events/<camera_id>_events.jsonl` and merged into `all_events.jsonl`.
@@ -197,7 +197,7 @@ Dashboard is connected to the live API — metrics update as events are ingested
 
 ```
 store-intelligence/
-├── pipeline/       detect.py  tracker.py  emit.py  ingest_events.py  run.sh
+├── pipeline/       detect.py  tracker.py  emit.py  ingest_events.py
 ├── app/            main.py  models.py  ingestion.py  metrics.py  funnel.py
 │                   heatmap.py  anomalies.py  health.py
 ├── storage/        schema.sql
