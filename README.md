@@ -209,7 +209,7 @@ Dashboard is connected to the live API — metrics update as events are ingested
 
 ```
 store-intelligence/
-├── pipeline/       detect.py  tracker.py  emit.py  ingest_events.py  run.sh  run.bat
+├── pipeline/       detect.py  tracker.py  emit.py  ingest_events.py  run.sh
 ├── app/            main.py  models.py  ingestion.py  metrics.py  funnel.py
 │                   heatmap.py  anomalies.py  health.py
 ├── storage/        schema.sql
